@@ -56,8 +56,8 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
 
 // src/lib/identity.ts
 var HOME_PATH = new RegExp(
@@ -217,8 +217,13 @@ var GLOBAL_TWIN = new Map(
   ])
 );
 
-// src/lib/score.ts
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+
+// src/lib/score.ts
+var execFileAsync2 = promisify2(execFile2);
 
 // src/lib/distill.ts
 function openingsOf(literal) {

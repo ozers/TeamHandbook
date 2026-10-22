@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { readConfigFile } from "./config.js";
-import { claudeErrorReason, runClaudeCli } from "./score.js";
+import { claudeErrorReason, runModelCli } from "./score.js";
 import type { ClaudeRunner, GateVerdict } from "./score.js";
 import type { Signal } from "./signals.js";
 import { candidatesDir } from "./skill-index.js";
@@ -358,7 +358,7 @@ export async function distillVerdict(
   verdict: GateVerdict,
   occurrences: number,
   config: DistillConfig = defaultDistillConfig,
-  runner: ClaudeRunner = runClaudeCli,
+  runner: ClaudeRunner = runModelCli,
   remoteUrl: (cwd: string) => string | null = gitRemoteUrl,
 ): Promise<DistillOutcome> {
   const signal = verdict.signal;

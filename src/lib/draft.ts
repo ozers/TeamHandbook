@@ -2429,8 +2429,8 @@ function extractSkill(reply: string): string | null {
  * invocation `score.ts` builds. Nothing here opens a second way to run the CLI.
  */
 const defaultDraftRunner: DraftRunner = async (prompt) => {
-  const { runClaudeCli } = await import("./score.js");
-  return runClaudeCli(prompt, DRAFT_MODEL, DRAFT_TIMEOUT_MS);
+  const { runModelCli } = await import("./score.js");
+  return runModelCli(prompt, DRAFT_MODEL, DRAFT_TIMEOUT_MS);
 };
 
 const DRAFT_MODEL = "sonnet";

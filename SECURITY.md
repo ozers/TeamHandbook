@@ -527,7 +527,7 @@ default and allowed only by name, one at a time, each because the call cannot re
 without it. Anything unrelated to reaching a model - your shell agent, your forge tokens -
 is not on the list at all.
 
-The exact names are in `src/lib/score.ts`, next to the reason each one is there, and
+The exact names are in `src/lib/child-env.ts` and `src/lib/score.ts`, next to the reason each one is there, and
 `/handbook:doctor` runs its own check through the same list, so a green report and a
 working harvest cannot come apart.
 
@@ -539,6 +539,43 @@ not restricted** - it gets this machine's tools, MCP servers and settings, which
 every version before this one did. `/handbook:doctor` reports which of the two you are on,
 under `model call isolation`, and says so only after a real call has answered through the
 restricted invocation; upgrading Claude Code is the fix.
+
+### The model call under OpenCode
+
+When the commands run from OpenCode (`node dist/opencode-install.js`), the same call goes
+to `opencode run` instead of `claude -p`, with the same promise: no tools, no MCP servers,
+none of your settings or instructions, an empty working directory, the prompt on stdin and
+a restricted environment. OpenCode has no single switch for that, so it is assembled from
+several, each read from OpenCode v1.19's source rather than from a documented contract:
+
+- **tools are denied**, with a permission rule that denies every tool. That rule removes
+  the tools from what the model is offered at all, MCP tools included; it is not a prompt
+  asking whether to run one;
+- **no plugins**: `--pure`, which also keeps TeamHandbook's own plugin, if you add one,
+  from firing inside the call;
+- **none of your configuration**: the child gets a configuration directory of its own,
+  created for the call and removed after it, so your global `opencode.json`, its plugins,
+  MCP servers, custom tools and `AGENTS.md` are never read. Project configuration,
+  `CLAUDE.md` files and `.claude/skills` are switched off as well. From your global config
+  only the model and provider settings are carried over (`model`, `small_model`,
+  `provider`, `enabled_providers`, `disabled_providers`), because without them the call
+  answers on a model you did not pick. A `provider` entry can hold an API key; it reaches
+  the child in its environment, the same place a key in `*_API_KEY` already does;
+- **the call's session is kept out of your history**: it is written to a database created
+  for the call and deleted after it, not to OpenCode's own;
+- **a restricted environment**: the same list as above, plus `*_API_KEY` variables, because
+  OpenCode reads each provider's key from names in a catalog it downloads, which cannot be
+  listed in advance. Every `OPENCODE_*` variable of the session that started the call is
+  refused. Your OpenCode login (`auth.json`) is found because the data directory is left
+  where it is.
+
+Two things this does not cover, and `/handbook:doctor` names the first. The switches were
+read from v1.19's source, and one of them (`OPENCODE_TEST_HOME`, which keeps `~/.opencode`
+out of the call) is a test hook in that source, so on a different OpenCode release the
+doctor reports isolation as unverified rather than as passed. And configuration your
+OpenCode receives from an organisation account, or from a managed or MDM profile, is
+loaded after everything above and could add a plugin or server back; TeamHandbook cannot
+switch that off.
 
 ### A team repository you joined
 

@@ -1,25 +1,25 @@
 // src/lib/pipeline.ts
 import {
   appendFileSync,
-  mkdirSync as mkdirSync6,
+  mkdirSync as mkdirSync7,
   readdirSync as readdirSync5,
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   renameSync as renameSync2,
-  rmSync as rmSync3,
+  rmSync as rmSync4,
   statSync,
   utimesSync,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { basename as basename3, join as join12 } from "node:path";
+import { basename as basename3, join as join13 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir4 } from "node:os";
-import { dirname as dirname5, join as join8 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname5, join as join9 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname4, isAbsolute, join as join7 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname4, isAbsolute, join as join8 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -76,11 +76,11 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/score.ts
-import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { join as join6 } from "node:path";
-import { promisify } from "node:util";
+import { execFile as execFile2 } from "node:child_process";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join7 } from "node:path";
+import { promisify as promisify2 } from "node:util";
 
 // src/lib/identity.ts
 import { execFileSync } from "node:child_process";
@@ -740,66 +740,7 @@ function loadMutedFingerprints(home = handbookHome()) {
   return /* @__PURE__ */ new Set();
 }
 
-// src/lib/score.ts
-var execFileAsync = promisify(execFile);
-function gateAutoEnabled(home = handbookHome()) {
-  if (configIsBroken(home)) return false;
-  const gate = readConfigFile(home).gate;
-  return gate?.auto !== false;
-}
-function stripAnsi(text) {
-  return text.replace(/\u001B\[[0-9;]*m/g, "");
-}
-var BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
-function failureStderr(raw) {
-  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
-}
-function claudeErrorReason(err) {
-  const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
-  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
-  if (stderr) return stderr;
-  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
-  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
-  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
-  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
-  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
-  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
-  return firstLine.slice(0, 200);
-}
-var CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
-var CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
-async function claudeHelpText() {
-  try {
-    const { stdout } = await execFileAsync("claude", ["--help"], { timeout: 15e3 });
-    return stdout;
-  } catch {
-    return "";
-  }
-}
-function declaredOptions(helpText) {
-  const rows = [];
-  for (const line of helpText.split("\n")) {
-    const match = /^(\s*)-\S/.exec(line);
-    if (match) rows.push({ indent: match[1].length, text: line });
-  }
-  if (rows.length === 0) return /* @__PURE__ */ new Set();
-  const column = Math.min(...rows.map((r) => r.indent));
-  const options = /* @__PURE__ */ new Set();
-  for (const row of rows) {
-    if (row.indent > column + 1) continue;
-    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
-    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
-  }
-  return options;
-}
-function childIsolationArgsFor(helpText) {
-  const declared = declaredOptions(helpText);
-  if (declared.size === 0) {
-    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
-  }
-  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
-}
+// src/lib/child-env.ts
 var CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
   // where the CLI, node and its config live
   "PATH",
@@ -848,6 +789,241 @@ var CHILD_ENV_PREFIXES = [
   "CLOUDSDK_",
   "AZURE_"
 ];
+
+// src/lib/host/index.ts
+var HOST_NAMES = ["claude-code", "opencode"];
+function isHostName(value) {
+  return typeof value === "string" && HOST_NAMES.includes(value);
+}
+function activeHost(env = process.env, home = handbookHome()) {
+  if (isHostName(env.TEAMHANDBOOK_HOST)) return env.TEAMHANDBOOK_HOST;
+  const configured = readConfigFile(home).host;
+  if (isHostName(configured)) return configured;
+  return "claude-code";
+}
+
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { mkdirSync as mkdirSync4, mkdtempSync, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { homedir as homedir4, tmpdir as tmpdir2 } from "node:os";
+import { join as join6 } from "node:path";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+var CARRIED_CONFIG_KEYS = ["model", "small_model", "provider", "enabled_providers", "disabled_providers"];
+var DENY_ALL_TOOLS = { "*": "deny" };
+var CHILD_SWITCHES = {
+  OPENCODE_PURE: "1",
+  OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+  OPENCODE_DISABLE_CLAUDE_CODE: "1",
+  OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+  OPENCODE_DISABLE_AUTOUPDATE: "1",
+  OPENCODE_DISABLE_LSP_DOWNLOAD: "1"
+};
+function stripJsonc(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 2;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function opencodeConfigDir(env = process.env) {
+  return join6(env.XDG_CONFIG_HOME || join6(homedir4(), ".config"), "opencode");
+}
+function carriedUserConfig(configDir = opencodeConfigDir()) {
+  const carried = {};
+  for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
+    let parsed;
+    try {
+      parsed = JSON.parse(stripJsonc(readFileSync4(join6(configDir, name), "utf8")));
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(parsed)) continue;
+    for (const key of CARRIED_CONFIG_KEYS) {
+      if (parsed[key] !== void 0) carried[key] = parsed[key];
+    }
+  }
+  return carried;
+}
+function opencodeModel(alias, home = handbookHome()) {
+  const section = readConfigFile(home).opencode;
+  const models = isPlainObject(section) && isPlainObject(section.models) ? section.models : {};
+  const mapped = models[alias];
+  if (typeof mapped === "string" && mapped.includes("/")) return mapped;
+  return alias.includes("/") ? alias : "";
+}
+var PROVIDER_KEY = /_API_KEY$/;
+var REAL_DIRS = ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"];
+function opencodeChildEnv(scratch, config, source = process.env) {
+  const env = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0 || name.startsWith("OPENCODE_")) continue;
+    if (CHILD_ENV_EXACT.has(name) || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p)) || PROVIDER_KEY.test(name) || REAL_DIRS.includes(name)) {
+      env[name] = value;
+    }
+  }
+  env.XDG_CONFIG_HOME = join6(scratch, "config");
+  env.OPENCODE_TEST_HOME = join6(scratch, "home");
+  env.OPENCODE_DB = join6(scratch, "child.db");
+  Object.assign(env, CHILD_SWITCHES);
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, permission: DENY_ALL_TOOLS });
+  return env;
+}
+function opencodeInvocation(input) {
+  const scratch = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
+  const cwd = join6(scratch, "work");
+  for (const dir of [cwd, join6(scratch, "config"), join6(scratch, "home")]) mkdirSync4(dir);
+  const source = input.source ?? process.env;
+  const model = opencodeModel(input.model, input.home);
+  const args = ["run", "--pure", "--format", "json", "--dir", cwd];
+  if (model) args.push("-m", model);
+  return {
+    args,
+    input: input.prompt,
+    env: opencodeChildEnv(scratch, carriedUserConfig(opencodeConfigDir(source)), source),
+    cwd,
+    done: () => rmSync2(scratch, { recursive: true, force: true })
+  };
+}
+function parseRunOutput(stdout) {
+  const texts = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(event)) continue;
+    if (event.type === "error") {
+      throw Object.assign(new Error("opencode reported an error"), { cli: "opencode", stderr: errorText(event) });
+    }
+    if (event.type !== "text" || !isPlainObject(event.part)) continue;
+    if (event.part.synthetic === true) continue;
+    if (typeof event.part.text === "string") texts.push(event.part.text);
+  }
+  const reply = texts.join("\n").trim();
+  if (!reply) throw Object.assign(new Error("opencode returned no text"), { cli: "opencode", stderr: "opencode returned no text" });
+  return reply;
+}
+function errorText(event) {
+  const error = event.error;
+  if (typeof error === "string") return error.slice(0, 200);
+  if (isPlainObject(error)) {
+    const data = isPlainObject(error.data) ? error.data : {};
+    const message = typeof data.message === "string" ? data.message : error.name;
+    if (typeof message === "string") return message.slice(0, 200);
+  }
+  return "opencode reported an error";
+}
+var runOpencodeCli = async (prompt, model, timeoutMs) => {
+  const invocation = opencodeInvocation({ prompt, model });
+  const call = execFileAsync("opencode", invocation.args, {
+    timeout: timeoutMs,
+    // every event line repeats its whole part, so the stream is a few times the reply
+    maxBuffer: 4 * 1024 * 1024,
+    cwd: invocation.cwd,
+    env: invocation.env
+  });
+  const stdin = call.child.stdin;
+  if (stdin) {
+    stdin.on("error", () => {
+    });
+    stdin.end(invocation.input);
+  }
+  try {
+    const { stdout } = await call;
+    return parseRunOutput(stdout);
+  } catch (err) {
+    if (typeof err === "object" && err !== null) Object.assign(err, { cli: "opencode" });
+    throw err;
+  } finally {
+    invocation.done();
+  }
+};
+
+// src/lib/score.ts
+var execFileAsync2 = promisify2(execFile2);
+function gateAutoEnabled(home = handbookHome()) {
+  if (configIsBroken(home)) return false;
+  const gate = readConfigFile(home).gate;
+  return gate?.auto !== false;
+}
+function stripAnsi(text) {
+  return text.replace(/\u001B\[[0-9;]*m/g, "");
+}
+var BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
+function failureStderr(raw) {
+  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
+}
+function claudeErrorReason(err) {
+  const e = err;
+  const cli = e?.cli === "opencode" ? "opencode" : "claude";
+  if (e?.code === "ENOENT") {
+    return cli === "opencode" ? "opencode CLI not found on PATH (install OpenCode or fix PATH) - run /handbook:doctor" : "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
+  }
+  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
+  if (stderr) return stderr;
+  if (e?.killed) return `${cli} timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor`;
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return `${cli} wrote past the ${cli === "opencode" ? "4" : "1"} MB output cap - run /handbook:doctor`;
+  if (typeof e?.code === "number") return `${cli} exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `${cli} was killed by ${e.signal} - run /handbook:doctor`;
+  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
+  if (/^Command failed:\s*(claude|opencode)\b/.test(firstLine)) return `${cli} invocation failed (run /handbook:doctor)`;
+  return firstLine.slice(0, 200);
+}
+var CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
+var CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
+async function claudeHelpText() {
+  try {
+    const { stdout } = await execFileAsync2("claude", ["--help"], { timeout: 15e3 });
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+function declaredOptions(helpText) {
+  const rows = [];
+  for (const line of helpText.split("\n")) {
+    const match = /^(\s*)-\S/.exec(line);
+    if (match) rows.push({ indent: match[1].length, text: line });
+  }
+  if (rows.length === 0) return /* @__PURE__ */ new Set();
+  const column = Math.min(...rows.map((r) => r.indent));
+  const options = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    if (row.indent > column + 1) continue;
+    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
+    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
+  }
+  return options;
+}
+function childIsolationArgsFor(helpText) {
+  const declared = declaredOptions(helpText);
+  if (declared.size === 0) {
+    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
+  }
+  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
+}
 var CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
   // which backend answers at all
   "CLAUDE_CODE_USE_BEDROCK",
@@ -909,18 +1085,18 @@ function childInvocation(input) {
   const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
-  const cwd = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
+  const cwd = mkdtempSync2(join7(tmpdir3(), "teamhandbook-child-"));
   return {
     args,
     input: input.prompt,
     env: childEnv(),
     cwd,
-    done: () => rmSync2(cwd, { recursive: true, force: true })
+    done: () => rmSync3(cwd, { recursive: true, force: true })
   };
 }
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const invocation = childInvocation({ prompt, model, helpText: await claudeHelpText() });
-  const call = execFileAsync("claude", invocation.args, {
+  const call = execFileAsync2("claude", invocation.args, {
     timeout: timeoutMs,
     maxBuffer: 1024 * 1024,
     cwd: invocation.cwd,
@@ -939,6 +1115,7 @@ var runClaudeCli = async (prompt, model, timeoutMs) => {
     invocation.done();
   }
 };
+var runModelCli = (prompt, model, timeoutMs) => activeHost() === "opencode" ? runOpencodeCli(prompt, model, timeoutMs) : runClaudeCli(prompt, model, timeoutMs);
 
 // src/lib/distill.ts
 function normalizeRemoteUrl(raw) {
@@ -1047,12 +1224,12 @@ function uniqueSlug(baseSlug, taken) {
 }
 function writeCandidate(artifact, home = handbookHome()) {
   const base = candidatesDir(home);
-  const slug = uniqueSlug(artifact.slug, (s) => existsSync3(join7(base, s)));
-  const dir = join7(base, slug);
-  mkdirSync4(dir, { recursive: true });
+  const slug = uniqueSlug(artifact.slug, (s) => existsSync3(join8(base, s)));
+  const dir = join8(base, slug);
+  mkdirSync5(dir, { recursive: true });
   const skillMd = slug === artifact.slug ? artifact.skillMd : renameSkillMd(artifact.skillMd, slug);
-  writeFileSync3(join7(dir, "SKILL.md"), skillMd);
-  writeFileSync3(join7(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
+  writeFileSync3(join8(dir, "SKILL.md"), skillMd);
+  writeFileSync3(join8(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
   return dir;
 }
 
@@ -1076,16 +1253,16 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join8(homedir4(), ".claude", "plugins", "marketplaces");
+  return join9(homedir5(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);
-  return team ? join8(root, team.marketplaceName, "skills") : null;
+  return team ? join9(root, team.marketplaceName, "skills") : null;
 }
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync5, readdirSync as readdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join9 } from "node:path";
+import { mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join10 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
   "postToolUse",
@@ -1102,7 +1279,7 @@ var FIELDS = [
   "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
-  return join9(home, "counters.json");
+  return join10(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
   const base = {
@@ -1121,7 +1298,7 @@ function readCounters(home = handbookHome()) {
     workflowSkippedHygiene: 0
   };
   try {
-    const parsed = JSON.parse(readFileSync5(countersFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync6(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
   } catch {
   }
@@ -1130,7 +1307,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync5(home, { recursive: true });
+  mkdirSync6(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -1138,22 +1315,22 @@ var DEBUG_DUMP_CAP = 50;
 function maybeDumpPayload(raw, home = handbookHome()) {
   if (!process.env.TEAMHANDBOOK_DEBUG) return;
   try {
-    const dir = join9(home, "debug");
-    mkdirSync5(dir, { recursive: true });
+    const dir = join10(home, "debug");
+    mkdirSync6(dir, { recursive: true });
     const n = readdirSync4(dir).length;
     if (n >= DEBUG_DUMP_CAP) return;
-    writeFileSync4(join9(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
+    writeFileSync4(join10(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
   } catch {
   }
 }
 
 // src/lib/harvest.ts
 import { createHash } from "node:crypto";
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 
 // src/lib/teachings.ts
-import { readFileSync as readFileSync6 } from "node:fs";
-import { join as join10 } from "node:path";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join11 } from "node:path";
 var STORE_LIMIT = 2e3;
 var SAMPLE_CHARS = 160;
 var RECORD_VERSION = 2;
@@ -1267,11 +1444,11 @@ function sameTeaching(a, b) {
   return shared === shorter || shared >= 3 && shared / shorter >= 0.5;
 }
 function teachingsFile(home = handbookHome()) {
-  return join10(home, "teachings.json");
+  return join11(home, "teachings.json");
 }
 function readTeachings(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync6(teachingsFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(teachingsFile(home), "utf8"));
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (r) => Array.isArray(r?.words) && typeof r?.count === "number" && typeof r?.firstAt === "string"
@@ -1323,7 +1500,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
 import { existsSync as existsSync4 } from "node:fs";
 
 // src/lib/transcript.ts
-import { readFileSync as readFileSync7 } from "node:fs";
+import { readFileSync as readFileSync8 } from "node:fs";
 var PER_USER_CAP = 1e3;
 var PER_ASSISTANT_CAP = 1500;
 var USER_HEAD = 700;
@@ -1343,7 +1520,7 @@ function textBlocks(content) {
 function readTranscriptTexts(path) {
   let raw;
   try {
-    raw = readFileSync7(path, "utf8");
+    raw = readFileSync8(path, "utf8");
   } catch {
     return [];
   }
@@ -1900,7 +2077,7 @@ function suggestedTargetFor(scope, teamConfigured) {
 }
 async function harvestSession(job, home = handbookHome(), deps = {}) {
   const config = loadHarvestConfig(home);
-  const runner = deps.runner ?? runClaudeCli;
+  const runner = deps.runner ?? runModelCli;
   const now = deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
   const { slice: readSlice, redacted } = job.transcriptPath ? buildTranscriptSlice(job.transcriptPath, config.transcriptCharCap) : { slice: "", redacted: 0 };
   const slice = maskIdentity(readSlice);
@@ -1960,7 +2137,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync4(join11(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync4(join12(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,
@@ -2021,19 +2198,19 @@ function listSkillsSafe(dirs) {
 
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
-  return join12(home, "pending");
+  return join13(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
-  mkdirSync6(pendingDir(home), { recursive: true });
+  mkdirSync7(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
-  let file = join12(pendingDir(home), `${base}.json`);
+  let file = join13(pendingDir(home), `${base}.json`);
   for (let i = 0; i < 50; i++) {
     try {
       writeFileSync5(file, JSON.stringify(job), { flag: "wx" });
       return file;
     } catch {
-      file = join12(pendingDir(home), `${base}-x${i}.json`);
+      file = join13(pendingDir(home), `${base}-x${i}.json`);
     }
   }
   return null;
@@ -2049,10 +2226,10 @@ function reclaimStaleClaims(dir) {
     return;
   }
   for (const entry of entries) {
-    const file = join12(dir, entry);
+    const file = join13(dir, entry);
     if (CLAIM_TEMP.test(entry)) {
       try {
-        if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) rmSync3(file, { force: true });
+        if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) rmSync4(file, { force: true });
       } catch {
       }
       continue;
@@ -2061,22 +2238,22 @@ function reclaimStaleClaims(dir) {
     if (!m) continue;
     try {
       if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) {
-        renameSync2(file, join12(dir, `reclaimed-${Date.now()}-${m[1].replace(RECLAIM_STAMP, "")}`));
+        renameSync2(file, join13(dir, `reclaimed-${Date.now()}-${m[1].replace(RECLAIM_STAMP, "")}`));
       }
     } catch {
     }
   }
 }
 function releaseHarvestJob(claimedFile) {
-  rmSync3(claimedFile, { force: true });
+  rmSync4(claimedFile, { force: true });
 }
 var MAX_HARVEST_ATTEMPTS = 3;
 function abandonedFile(home = handbookHome()) {
-  return join12(home, "abandoned.jsonl");
+  return join13(home, "abandoned.jsonl");
 }
 function abandonJob(job, home) {
   try {
-    mkdirSync6(home, { recursive: true });
+    mkdirSync7(home, { recursive: true });
     appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
   } catch {
   }
@@ -2093,7 +2270,7 @@ function drainHarvestJobs(home = handbookHome()) {
   }
   const jobs = [];
   for (const entry of entries.filter((e) => e.endsWith(".json")).sort()) {
-    const file = join12(pendingDir(home), entry);
+    const file = join13(pendingDir(home), entry);
     const claimed = `${file}.claimed-${process.pid}`;
     try {
       renameSync2(file, claimed);
@@ -2104,20 +2281,20 @@ function drainHarvestJobs(home = handbookHome()) {
     }
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync8(claimed, "utf8"));
+      parsed = JSON.parse(readFileSync9(claimed, "utf8"));
     } catch {
-      rmSync3(claimed, { force: true });
+      rmSync4(claimed, { force: true });
       continue;
     }
     const job = parsed;
     if (!job || typeof job !== "object" || typeof job.sessionId !== "string" || !job.evidence) {
-      rmSync3(claimed, { force: true });
+      rmSync4(claimed, { force: true });
       continue;
     }
     const attempts = (job.attempts ?? 0) + 1;
     if (attempts > MAX_HARVEST_ATTEMPTS) {
       abandonJob(job, home);
-      rmSync3(claimed, { force: true });
+      rmSync4(claimed, { force: true });
       continue;
     }
     const claimedJob = { ...job, attempts };
@@ -2131,24 +2308,24 @@ function drainHarvestJobs(home = handbookHome()) {
   return jobs;
 }
 function pipelineLogFile(home = handbookHome()) {
-  return join12(home, "pipeline.log");
+  return join13(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
-  mkdirSync6(home, { recursive: true });
+  mkdirSync7(home, { recursive: true });
   const file = pipelineLogFile(home);
   appendFileSync(file, JSON.stringify({ ts, ...summary }) + "\n");
   try {
     if (statSync(file).size > LOG_ROTATE_BYTES) {
-      const lines = readFileSync8(file, "utf8").trim().split("\n");
+      const lines = readFileSync9(file, "utf8").trim().split("\n");
       writeFileAtomic(file, lines.slice(-LOG_KEEP_LINES).join("\n") + "\n");
     }
   } catch {
   }
 }
 function harvestedDir(home = handbookHome()) {
-  return join12(home, "harvested");
+  return join13(home, "harvested");
 }
 function harvestMarkerFile(job, home) {
   if (!job.transcriptPath) return null;
@@ -2159,20 +2336,20 @@ function harvestMarkerFile(job, home) {
     return null;
   }
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
-  return join12(harvestedDir(home), `${session}-${size}`);
+  return join13(harvestedDir(home), `${session}-${size}`);
 }
 var MARKER_CLAIMED = "claimed";
 var MARKER_DONE = "done";
 function markerIsFinished(marker) {
   try {
-    return readFileSync8(marker, "utf8").trim() === MARKER_DONE;
+    return readFileSync9(marker, "utf8").trim() === MARKER_DONE;
   } catch {
     return false;
   }
 }
 function claimHarvest(marker, home) {
   try {
-    mkdirSync6(harvestedDir(home), { recursive: true });
+    mkdirSync7(harvestedDir(home), { recursive: true });
     writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
     return true;
   } catch (err) {
@@ -2185,7 +2362,7 @@ function claimHarvest(marker, home) {
       return true;
     }
     if (Date.now() - claimedAt <= STALE_CLAIM_MS) return false;
-    rmSync3(marker, { force: true });
+    rmSync4(marker, { force: true });
     try {
       writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
       return true;
@@ -2211,9 +2388,9 @@ function cleanupStaleHarvestMarkers(home, now = Date.now()) {
   }
   for (const entry of entries) {
     try {
-      const file = join12(dir, entry);
+      const file = join13(dir, entry);
       const horizon = markerIsFinished(file) ? MARKER_MAX_AGE_MS : STALE_CLAIM_MS;
-      if (now - statSync(file).mtimeMs > horizon) rmSync3(file, { force: true });
+      if (now - statSync(file).mtimeMs > horizon) rmSync4(file, { force: true });
     } catch {
     }
   }
@@ -2289,7 +2466,7 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
     ]
   };
   if (summary.outcome === "error") {
-    if (marker) rmSync3(marker, { force: true });
+    if (marker) rmSync4(marker, { force: true });
     bumpCounter("gateErrors", home);
     const attempts = job.attempts ?? 0;
     if (attempts < MAX_HARVEST_ATTEMPTS) {

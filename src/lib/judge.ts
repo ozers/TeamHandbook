@@ -304,8 +304,8 @@ function oneLine(value: unknown): string {
 
 /** The real call, through the isolated, tool-less invocation `score.ts` builds; this module starts no child of its own. */
 const defaultJudgeRunner: JudgeRunner = async (prompt) => {
-  const { runClaudeCli } = await import("./score.js");
-  return runClaudeCli(prompt, JUDGE_MODEL, JUDGE_TIMEOUT_MS);
+  const { runModelCli } = await import("./score.js");
+  return runModelCli(prompt, JUDGE_MODEL, JUDGE_TIMEOUT_MS);
 };
 
 const JUDGE_MODEL = "sonnet";

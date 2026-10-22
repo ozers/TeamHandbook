@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fenceUntrusted } from "./prompt-safety.js";
 import { balancedArrayAt, loadHarvestConfig } from "./harvest.js";
-import { claudeErrorReason, runClaudeCli } from "./score.js";
+import { claudeErrorReason, runModelCli } from "./score.js";
 import type { ClaudeRunner } from "./score.js";
 import { candidatesDir } from "./skill-index.js";
 import {
@@ -199,7 +199,7 @@ function pendingBreakdown(home: string): { pending: number; byKind: Record<strin
 
 export async function sweepQueue(home: string, options: SweepOptions = {}): Promise<SweepReport> {
   const config = loadHarvestConfig(home);
-  const runner = options.runner ?? runClaudeCli;
+  const runner = options.runner ?? runModelCli;
   const model = options.model ?? config.model;
   const timeoutMs = options.timeoutMs ?? SWEEP_TIMEOUT_MS;
   const batchSize = options.batchSize ?? BATCH_SIZE;

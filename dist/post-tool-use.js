@@ -685,8 +685,8 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
 
 // src/lib/identity.ts
 import { execFileSync } from "node:child_process";
@@ -835,8 +835,13 @@ var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
 var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
 var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
-// src/lib/score.ts
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+
+// src/lib/score.ts
+var execFileAsync2 = promisify2(execFile2);
 
 // src/lib/distill.ts
 function openingsOf(literal) {

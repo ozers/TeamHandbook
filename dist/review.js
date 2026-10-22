@@ -1051,116 +1051,11 @@ var init_queue = __esm({
   }
 });
 
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { join as join6 } from "node:path";
-import { promisify } from "node:util";
-function loadScoreConfig(home = handbookHome()) {
-  const gate = readConfigFile(home).gate;
-  return {
-    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
-    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
-    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
-  };
-}
-function stripAnsi(text) {
-  return text.replace(/\u001B\[[0-9;]*m/g, "");
-}
-function failureStderr(raw) {
-  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
-}
-function claudeErrorReason(err) {
-  const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
-  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
-  if (stderr) return stderr;
-  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
-  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
-  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
-  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
-  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
-  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
-  return firstLine.slice(0, 200);
-}
-async function claudeHelpText() {
-  try {
-    const { stdout } = await execFileAsync("claude", ["--help"], { timeout: 15e3 });
-    return stdout;
-  } catch {
-    return "";
-  }
-}
-function declaredOptions(helpText) {
-  const rows = [];
-  for (const line of helpText.split("\n")) {
-    const match = /^(\s*)-\S/.exec(line);
-    if (match) rows.push({ indent: match[1].length, text: line });
-  }
-  if (rows.length === 0) return /* @__PURE__ */ new Set();
-  const column = Math.min(...rows.map((r) => r.indent));
-  const options = /* @__PURE__ */ new Set();
-  for (const row of rows) {
-    if (row.indent > column + 1) continue;
-    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
-    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
-  }
-  return options;
-}
-function childIsolationArgsFor(helpText) {
-  const declared = declaredOptions(helpText);
-  if (declared.size === 0) {
-    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
-  }
-  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
-}
-function childEnv(source = process.env) {
-  const env = {};
-  const designated = source.CLAUDE_CODE_HOST_AUTH_ENV_VAR;
-  for (const [name, value] of Object.entries(source)) {
-    if (value === void 0) continue;
-    if (CHILD_ENV_NEVER.includes(name)) continue;
-    if (name.startsWith("CLAUDE_")) {
-      if (CHILD_ENV_CLAUDE_ALLOW.has(name)) env[name] = value;
-      continue;
-    }
-    if (CHILD_ENV_EXACT.has(name) || name === designated || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p))) {
-      env[name] = value;
-    }
-  }
-  return env;
-}
-function childInvocation(input) {
-  const args = ["-p"];
-  if (input.model) args.push("--model", input.model);
-  args.push(...childIsolationArgsFor(input.helpText));
-  const cwd = mkdtempSync2(join6(tmpdir2(), "teamhandbook-child-"));
-  return {
-    args,
-    input: input.prompt,
-    env: childEnv(),
-    cwd,
-    done: () => rmSync3(cwd, { recursive: true, force: true })
-  };
-}
-var execFileAsync, defaultScoreConfig, BENIGN_CLAUDE_WARNING, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_EXACT, CHILD_ENV_PREFIXES, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER, runClaudeCli;
-var init_score = __esm({
-  "src/lib/score.ts"() {
+// src/lib/child-env.ts
+var CHILD_ENV_EXACT, CHILD_ENV_PREFIXES;
+var init_child_env = __esm({
+  "src/lib/child-env.ts"() {
     "use strict";
-    init_session_state();
-    init_config();
-    init_prompt_safety();
-    init_queue();
-    execFileAsync = promisify(execFile);
-    defaultScoreConfig = {
-      model: "haiku",
-      threshold: 7,
-      timeoutMs: 6e4
-    };
-    BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
-    CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
-    CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
     CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
       // where the CLI, node and its config live
       "PATH",
@@ -1209,6 +1104,313 @@ var init_score = __esm({
       "CLOUDSDK_",
       "AZURE_"
     ];
+  }
+});
+
+// src/lib/host/index.ts
+function isHostName(value) {
+  return typeof value === "string" && HOST_NAMES.includes(value);
+}
+function activeHost(env = process.env, home = handbookHome()) {
+  if (isHostName(env.TEAMHANDBOOK_HOST)) return env.TEAMHANDBOOK_HOST;
+  const configured = readConfigFile(home).host;
+  if (isHostName(configured)) return configured;
+  return "claude-code";
+}
+var HOST_NAMES;
+var init_host = __esm({
+  "src/lib/host/index.ts"() {
+    "use strict";
+    init_config();
+    init_session_state();
+    HOST_NAMES = ["claude-code", "opencode"];
+  }
+});
+
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readFileSync as readFileSync4, rmSync as rmSync3 } from "node:fs";
+import { homedir as homedir3, tmpdir as tmpdir2 } from "node:os";
+import { join as join6 } from "node:path";
+import { promisify } from "node:util";
+function stripJsonc(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 2;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function opencodeConfigDir(env = process.env) {
+  return join6(env.XDG_CONFIG_HOME || join6(homedir3(), ".config"), "opencode");
+}
+function carriedUserConfig(configDir = opencodeConfigDir()) {
+  const carried = {};
+  for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
+    let parsed;
+    try {
+      parsed = JSON.parse(stripJsonc(readFileSync4(join6(configDir, name), "utf8")));
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(parsed)) continue;
+    for (const key of CARRIED_CONFIG_KEYS) {
+      if (parsed[key] !== void 0) carried[key] = parsed[key];
+    }
+  }
+  return carried;
+}
+function opencodeModel(alias, home = handbookHome()) {
+  const section = readConfigFile(home).opencode;
+  const models = isPlainObject(section) && isPlainObject(section.models) ? section.models : {};
+  const mapped = models[alias];
+  if (typeof mapped === "string" && mapped.includes("/")) return mapped;
+  return alias.includes("/") ? alias : "";
+}
+function opencodeChildEnv(scratch, config, source = process.env) {
+  const env = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0 || name.startsWith("OPENCODE_")) continue;
+    if (CHILD_ENV_EXACT.has(name) || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p)) || PROVIDER_KEY.test(name) || REAL_DIRS.includes(name)) {
+      env[name] = value;
+    }
+  }
+  env.XDG_CONFIG_HOME = join6(scratch, "config");
+  env.OPENCODE_TEST_HOME = join6(scratch, "home");
+  env.OPENCODE_DB = join6(scratch, "child.db");
+  Object.assign(env, CHILD_SWITCHES);
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, permission: DENY_ALL_TOOLS });
+  return env;
+}
+function opencodeInvocation(input) {
+  const scratch = mkdtempSync2(join6(tmpdir2(), "teamhandbook-child-"));
+  const cwd = join6(scratch, "work");
+  for (const dir of [cwd, join6(scratch, "config"), join6(scratch, "home")]) mkdirSync5(dir);
+  const source = input.source ?? process.env;
+  const model = opencodeModel(input.model, input.home);
+  const args = ["run", "--pure", "--format", "json", "--dir", cwd];
+  if (model) args.push("-m", model);
+  return {
+    args,
+    input: input.prompt,
+    env: opencodeChildEnv(scratch, carriedUserConfig(opencodeConfigDir(source)), source),
+    cwd,
+    done: () => rmSync3(scratch, { recursive: true, force: true })
+  };
+}
+function parseRunOutput(stdout) {
+  const texts = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(event)) continue;
+    if (event.type === "error") {
+      throw Object.assign(new Error("opencode reported an error"), { cli: "opencode", stderr: errorText(event) });
+    }
+    if (event.type !== "text" || !isPlainObject(event.part)) continue;
+    if (event.part.synthetic === true) continue;
+    if (typeof event.part.text === "string") texts.push(event.part.text);
+  }
+  const reply = texts.join("\n").trim();
+  if (!reply) throw Object.assign(new Error("opencode returned no text"), { cli: "opencode", stderr: "opencode returned no text" });
+  return reply;
+}
+function errorText(event) {
+  const error = event.error;
+  if (typeof error === "string") return error.slice(0, 200);
+  if (isPlainObject(error)) {
+    const data = isPlainObject(error.data) ? error.data : {};
+    const message = typeof data.message === "string" ? data.message : error.name;
+    if (typeof message === "string") return message.slice(0, 200);
+  }
+  return "opencode reported an error";
+}
+var execFileAsync, CARRIED_CONFIG_KEYS, DENY_ALL_TOOLS, CHILD_SWITCHES, PROVIDER_KEY, REAL_DIRS, runOpencodeCli;
+var init_opencode = __esm({
+  "src/lib/host/opencode.ts"() {
+    "use strict";
+    init_child_env();
+    init_config();
+    init_session_state();
+    execFileAsync = promisify(execFile);
+    CARRIED_CONFIG_KEYS = ["model", "small_model", "provider", "enabled_providers", "disabled_providers"];
+    DENY_ALL_TOOLS = { "*": "deny" };
+    CHILD_SWITCHES = {
+      OPENCODE_PURE: "1",
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1"
+    };
+    PROVIDER_KEY = /_API_KEY$/;
+    REAL_DIRS = ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"];
+    runOpencodeCli = async (prompt, model, timeoutMs) => {
+      const invocation = opencodeInvocation({ prompt, model });
+      const call = execFileAsync("opencode", invocation.args, {
+        timeout: timeoutMs,
+        // every event line repeats its whole part, so the stream is a few times the reply
+        maxBuffer: 4 * 1024 * 1024,
+        cwd: invocation.cwd,
+        env: invocation.env
+      });
+      const stdin = call.child.stdin;
+      if (stdin) {
+        stdin.on("error", () => {
+        });
+        stdin.end(invocation.input);
+      }
+      try {
+        const { stdout } = await call;
+        return parseRunOutput(stdout);
+      } catch (err) {
+        if (typeof err === "object" && err !== null) Object.assign(err, { cli: "opencode" });
+        throw err;
+      } finally {
+        invocation.done();
+      }
+    };
+  }
+});
+
+// src/lib/score.ts
+import { execFile as execFile2 } from "node:child_process";
+import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join7 } from "node:path";
+import { promisify as promisify2 } from "node:util";
+function loadScoreConfig(home = handbookHome()) {
+  const gate = readConfigFile(home).gate;
+  return {
+    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
+    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
+    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
+  };
+}
+function stripAnsi(text) {
+  return text.replace(/\u001B\[[0-9;]*m/g, "");
+}
+function failureStderr(raw) {
+  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
+}
+function claudeErrorReason(err) {
+  const e = err;
+  const cli = e?.cli === "opencode" ? "opencode" : "claude";
+  if (e?.code === "ENOENT") {
+    return cli === "opencode" ? "opencode CLI not found on PATH (install OpenCode or fix PATH) - run /handbook:doctor" : "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
+  }
+  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
+  if (stderr) return stderr;
+  if (e?.killed) return `${cli} timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor`;
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return `${cli} wrote past the ${cli === "opencode" ? "4" : "1"} MB output cap - run /handbook:doctor`;
+  if (typeof e?.code === "number") return `${cli} exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `${cli} was killed by ${e.signal} - run /handbook:doctor`;
+  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
+  if (/^Command failed:\s*(claude|opencode)\b/.test(firstLine)) return `${cli} invocation failed (run /handbook:doctor)`;
+  return firstLine.slice(0, 200);
+}
+async function claudeHelpText() {
+  try {
+    const { stdout } = await execFileAsync2("claude", ["--help"], { timeout: 15e3 });
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+function declaredOptions(helpText) {
+  const rows = [];
+  for (const line of helpText.split("\n")) {
+    const match = /^(\s*)-\S/.exec(line);
+    if (match) rows.push({ indent: match[1].length, text: line });
+  }
+  if (rows.length === 0) return /* @__PURE__ */ new Set();
+  const column = Math.min(...rows.map((r) => r.indent));
+  const options = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    if (row.indent > column + 1) continue;
+    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
+    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
+  }
+  return options;
+}
+function childIsolationArgsFor(helpText) {
+  const declared = declaredOptions(helpText);
+  if (declared.size === 0) {
+    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
+  }
+  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
+}
+function childEnv(source = process.env) {
+  const env = {};
+  const designated = source.CLAUDE_CODE_HOST_AUTH_ENV_VAR;
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    if (CHILD_ENV_NEVER.includes(name)) continue;
+    if (name.startsWith("CLAUDE_")) {
+      if (CHILD_ENV_CLAUDE_ALLOW.has(name)) env[name] = value;
+      continue;
+    }
+    if (CHILD_ENV_EXACT.has(name) || name === designated || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p))) {
+      env[name] = value;
+    }
+  }
+  return env;
+}
+function childInvocation(input) {
+  const args = ["-p"];
+  if (input.model) args.push("--model", input.model);
+  args.push(...childIsolationArgsFor(input.helpText));
+  const cwd = mkdtempSync3(join7(tmpdir3(), "teamhandbook-child-"));
+  return {
+    args,
+    input: input.prompt,
+    env: childEnv(),
+    cwd,
+    done: () => rmSync4(cwd, { recursive: true, force: true })
+  };
+}
+var execFileAsync2, defaultScoreConfig, BENIGN_CLAUDE_WARNING, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER, runClaudeCli, runModelCli;
+var init_score = __esm({
+  "src/lib/score.ts"() {
+    "use strict";
+    init_session_state();
+    init_config();
+    init_prompt_safety();
+    init_queue();
+    init_child_env();
+    init_host();
+    init_opencode();
+    execFileAsync2 = promisify2(execFile2);
+    defaultScoreConfig = {
+      model: "haiku",
+      threshold: 7,
+      timeoutMs: 6e4
+    };
+    BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
+    CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
+    CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
     CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
       // which backend answers at all
       "CLAUDE_CODE_USE_BEDROCK",
@@ -1252,7 +1454,7 @@ var init_score = __esm({
     ];
     runClaudeCli = async (prompt, model, timeoutMs) => {
       const invocation = childInvocation({ prompt, model, helpText: await claudeHelpText() });
-      const call = execFileAsync("claude", invocation.args, {
+      const call = execFileAsync2("claude", invocation.args, {
         timeout: timeoutMs,
         maxBuffer: 1024 * 1024,
         cwd: invocation.cwd,
@@ -1271,6 +1473,7 @@ var init_score = __esm({
         invocation.done();
       }
     };
+    runModelCli = (prompt, model, timeoutMs) => activeHost() === "opencode" ? runOpencodeCli(prompt, model, timeoutMs) : runClaudeCli(prompt, model, timeoutMs);
   }
 });
 
@@ -1325,20 +1528,20 @@ var init_skill_format = __esm({
 });
 
 // src/cli/review.ts
-import { readFileSync as readFileSync12 } from "node:fs";
-import { join as join15 } from "node:path";
+import { readFileSync as readFileSync13 } from "node:fs";
+import { join as join16 } from "node:path";
 
 // src/lib/deliver.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync8, rmdirSync, rmSync as rmSync5 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { basename as basename4, dirname as dirname7, join as join11, relative as relative3 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync9, rmdirSync, rmSync as rmSync6 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { basename as basename4, dirname as dirname7, join as join12, relative as relative3 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname4, join as join8 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname4, join as join9 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -1465,8 +1668,8 @@ function forgeNotice(repoUrl, problem) {
 }
 
 // src/lib/branch.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join7 } from "node:path";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join8 } from "node:path";
 init_identity();
 init_secrets();
 var TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+/;
@@ -1533,7 +1736,7 @@ function branchExampleProblem(value) {
 function readTeamBranchExample(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync4(join7(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
+    raw = JSON.parse(readFileSync5(join8(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
   } catch {
     return {};
   }
@@ -1567,7 +1770,7 @@ function compareVersions(a, b) {
 }
 function readPluginVersion(repoDir) {
   try {
-    const version = JSON.parse(readFileSync4(join7(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
+    const version = JSON.parse(readFileSync5(join8(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
     return typeof version === "string" ? version : void 0;
   } catch {
     return void 0;
@@ -1759,9 +1962,9 @@ init_config();
 init_fs_atomic();
 
 // src/lib/display-path.ts
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir3()) {
+function displayPath(path, userHome = homedir4()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -1876,7 +2079,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync5(join8(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync6(join9(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -2008,8 +2211,8 @@ init_skill_files();
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname5, join as join9, relative } from "node:path";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync7, readdirSync as readdirSync4, readFileSync as readFileSync7, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname5, join as join10, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -2081,7 +2284,7 @@ function buildPrBody(meta, grounded, update = false) {
 }
 function readGroundedCase(candidateDir) {
   try {
-    const parsed = JSON.parse(readFileSync6(join9(candidateDir, "grounded-case.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync7(join10(candidateDir, "grounded-case.json"), "utf8"));
     if (typeof parsed?.command === "string" && typeof parsed?.error === "string" && typeof parsed?.expect === "string" && Array.isArray(parsed?.edits)) {
       return parsed;
     }
@@ -2099,7 +2302,7 @@ function conflictingOptions(options) {
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
   for (const part of path.split("/")) {
-    current = join9(current, part);
+    current = join10(current, part);
     let stat;
     try {
       stat = lstatSync(current);
@@ -2120,10 +2323,10 @@ function linkedPathRefusal(repoDir, paths) {
   return null;
 }
 function bumpPluginVersion(repoDir, past = []) {
-  const file = join9(repoDir, ".claude-plugin", "plugin.json");
+  const file = join10(repoDir, ".claude-plugin", "plugin.json");
   if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
-    const plugin = JSON.parse(readFileSync6(file, "utf8"));
+    const plugin = JSON.parse(readFileSync7(file, "utf8"));
     const current = String(plugin.version ?? "0.1.0");
     const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
@@ -2181,7 +2384,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   }
   let candidateSkillMd;
   try {
-    candidateSkillMd = readFileSync6(join9(candidateDir, "SKILL.md"), "utf8");
+    candidateSkillMd = readFileSync7(join10(candidateDir, "SKILL.md"), "utf8");
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${displayPath(candidateDir)}` };
   }
@@ -2207,7 +2410,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   if ("error" in identity) return { ok: false, error: identity.error };
   const identityArgs = identity.args;
   const workdir = handbookWorkdir("handbook-publish-");
-  const repoDir = join9(workdir, "repo");
+  const repoDir = join10(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
@@ -2216,7 +2419,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
     const linked = linkedPathRefusal(repoDir, [skillDir]);
     if (linked) return { ok: false, error: linked };
-    const occupied = existsSync4(join9(repoDir, skillDir));
+    const occupied = existsSync4(join10(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
         ok: false,
@@ -2244,10 +2447,10 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     let pushed;
     try {
       git(["checkout", "-b", branch], repoDir);
-      if (occupied) rmSync4(join9(repoDir, skillDir), { recursive: true, force: true });
+      if (occupied) rmSync5(join10(repoDir, skillDir), { recursive: true, force: true });
       copySkillPayload(
         candidateDir,
-        join9(repoDir, skillDir),
+        join10(repoDir, skillDir),
         skillSlug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, skillSlug)
       );
       version = bumpPluginVersion(repoDir, decided.claims);
@@ -2273,7 +2476,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       ...request
     };
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    rmSync5(workdir, { recursive: true, force: true });
   }
 }
 var TEAM_SKILLS_DIR = "skills";
@@ -2282,9 +2485,9 @@ var TEAM_SKILLS_DIR = "skills";
 init_session_state();
 
 // src/lib/session-workflow.ts
-import { appendFileSync, mkdirSync as mkdirSync7, readFileSync as readFileSync7, realpathSync, statSync as statSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync8, readFileSync as readFileSync8, realpathSync, statSync as statSync2, writeFileSync as writeFileSync5 } from "node:fs";
 init_config();
-import { basename as basename3, dirname as dirname6, join as join10, relative as relative2, resolve, sep as sep2 } from "node:path";
+import { basename as basename3, dirname as dirname6, join as join11, relative as relative2, resolve, sep as sep2 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -2313,12 +2516,12 @@ var MAX_BLOB_BYTES = 1 << 20;
 function repositoryOf(dir) {
   let at = resolve(dir);
   for (; ; ) {
-    const dotgit = join10(at, ".git");
+    const dotgit = join11(at, ".git");
     try {
       const stat = statSync2(dotgit);
       if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
       if (stat.isFile()) {
-        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync7(dotgit, "utf8"));
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync8(dotgit, "utf8"));
         if (pointer) {
           const gitdir = resolve(at, pointer[1].trim());
           const marker = `${sep2}.git${sep2}worktrees${sep2}`;
@@ -2347,10 +2550,10 @@ function checkoutRoot(dir) {
 init_skill_index();
 init_queue();
 function soloSkillsDir(projectCwd) {
-  return join11(projectCwd, ".claude", "skills");
+  return join12(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join11(homedir4(), ".claude", "skills");
+  return join12(homedir5(), ".claude", "skills");
 }
 function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync5) {
   if (meta.demo) return meta.cwd ?? "";
@@ -2397,7 +2600,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
   }
   const conflict = conflictingOptions(options);
   if (conflict) return { ok: false, error: conflict };
-  const dir = join11(candidatesDir(home), slug);
+  const dir = join12(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
   if (meta.status !== "pending") {
@@ -2446,15 +2649,15 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
 }
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
-  const target = join11(skillsDir, slug);
+  const target = join12(skillsDir, slug);
   const occupied = existsSync5(target);
   const updatedExisting = occupied && mayUpdate(options, slug);
   if (occupied && !updatedExisting) {
     return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
   }
   try {
-    const skillMd = readFileSync8(join11(dir, "SKILL.md"), "utf8");
-    if (updatedExisting) rmSync5(target, { recursive: true, force: true });
+    const skillMd = readFileSync9(join12(dir, "SKILL.md"), "utf8");
+    if (updatedExisting) rmSync6(target, { recursive: true, force: true });
     copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
     return { error: `delivery failed: ${String(err)}` };
@@ -2462,7 +2665,7 @@ function installLocally(dir, meta, skillsDir, options) {
   return { slug, target, updatedExisting };
 }
 function localCollisionMessage(name, skillsDir, chosen) {
-  const taken = `a skill named "${name}" is already installed at ${displayPath(join11(skillsDir, name))}. Nothing was written.`;
+  const taken = `a skill named "${name}" is already installed at ${displayPath(join12(skillsDir, name))}. Nothing was written.`;
   const warning = "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to replace the skill this candidate collided with. ${warning}` : `${taken} Approve again with --update to replace it, or with --as <name> to install this one under a different name. ${warning}`;
 }
@@ -2648,7 +2851,7 @@ function commitProjectSkill(git, repoDir, target, subject) {
   return null;
 }
 function uninstall(target, skillsDir) {
-  rmSync5(target, { recursive: true, force: true });
+  rmSync6(target, { recursive: true, force: true });
   for (const dir of [skillsDir, dirname7(skillsDir)]) {
     try {
       rmdirSync(dir);
@@ -2704,8 +2907,8 @@ init_queue();
 
 // src/lib/sweep.ts
 init_prompt_safety();
-import { readFileSync as readFileSync9 } from "node:fs";
-import { join as join12 } from "node:path";
+import { readFileSync as readFileSync10 } from "node:fs";
+import { join as join13 } from "node:path";
 
 // src/lib/harvest.ts
 init_session_state();
@@ -2802,7 +3005,7 @@ var DEFAULT_REASON = "did not meet the discovery bar on re-judgement";
 function expectOf(home, slug) {
   try {
     const grounded = JSON.parse(
-      readFileSync9(join12(candidatesDir(home), slug, "grounded-case.json"), "utf8")
+      readFileSync10(join13(candidatesDir(home), slug, "grounded-case.json"), "utf8")
     );
     return typeof grounded?.expect === "string" ? grounded.expect : "";
   } catch {
@@ -2893,7 +3096,7 @@ function pendingBreakdown(home) {
 }
 async function sweepQueue(home, options = {}) {
   const config = loadHarvestConfig(home);
-  const runner = options.runner ?? runClaudeCli;
+  const runner = options.runner ?? runModelCli;
   const model = options.model ?? config.model;
   const timeoutMs = options.timeoutMs ?? SWEEP_TIMEOUT_MS;
   const batchSize = options.batchSize ?? BATCH_SIZE;
@@ -3067,8 +3270,8 @@ init_score();
 init_fs_atomic();
 init_session_state();
 init_config();
-import { existsSync as existsSync6, readFileSync as readFileSync10, readdirSync as readdirSync5 } from "node:fs";
-import { join as join13 } from "node:path";
+import { existsSync as existsSync6, readFileSync as readFileSync11, readdirSync as readdirSync5 } from "node:fs";
+import { join as join14 } from "node:path";
 init_queue();
 
 // src/lib/usage.ts
@@ -3083,7 +3286,7 @@ var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync5(join13(home, "pending"));
+    entries = readdirSync5(join14(home, "pending"));
   } catch {
     return 0;
   }
@@ -3091,7 +3294,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync10(join13(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync11(join14(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -3100,13 +3303,13 @@ function pendingHarvestCount(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync11 } from "node:fs";
+import { readFileSync as readFileSync12 } from "node:fs";
 init_session_state();
 init_queue();
 init_score();
 
 // src/lib/pipeline.ts
-import { basename as basename5, join as join14 } from "node:path";
+import { basename as basename5, join as join15 } from "node:path";
 init_fs_atomic();
 init_session_state();
 init_secrets();
@@ -3121,7 +3324,7 @@ init_skill_index();
 init_queue();
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join14(home, "pipeline.log");
+  return join15(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -3146,7 +3349,7 @@ var FILLER = new Set(
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync11(pipelineLogFile(home), "utf8");
+    raw = readFileSync12(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -3171,10 +3374,10 @@ function usage() {
   process.exit(2);
 }
 function showCandidate(home, slug) {
-  const dir = join15(candidatesDir(home), slug);
+  const dir = join16(candidatesDir(home), slug);
   let skillMd;
   try {
-    skillMd = readFileSync12(join15(dir, "SKILL.md"), "utf8");
+    skillMd = readFileSync13(join16(dir, "SKILL.md"), "utf8");
   } catch {
     console.error(`error: no candidate named "${slug}"`);
     process.exit(1);
@@ -3211,7 +3414,7 @@ function showCandidate(home, slug) {
   console.log("");
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
-    const grounded = JSON.parse(readFileSync12(join15(dir, "grounded-case.json"), "utf8"));
+    const grounded = JSON.parse(readFileSync13(join16(dir, "grounded-case.json"), "utf8"));
     if (grounded.quote) {
       console.log(`you said:  "${grounded.quote}"`);
     }

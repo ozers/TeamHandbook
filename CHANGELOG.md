@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Listing, drafting and reviewing work from OpenCode.** `node dist/opencode-install.js`
+  writes `/handbook/mine`, `/handbook/review`, `/handbook/status`, `/handbook/doctor` and
+  `/handbook/demo` into OpenCode's commands, generated from the same `commands/*.md` the
+  Claude Code plugin uses. Under OpenCode a draft is written by `opencode run`, with tools
+  denied, no plugins, no MCP servers and none of your configuration beyond the model and
+  provider, and the models the engine asks for map to OpenCode models through
+  `opencode.models` in `config.json`. `/handbook:doctor` probes that call as it probes
+  `claude -p`, and says when the OpenCode release is not the one its isolation was read
+  from. Session capture and the team repository stay Claude Code only.
+
 ## [0.25.0] - 2026-10-19
 
 ### Added

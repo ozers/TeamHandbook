@@ -9,6 +9,9 @@ import type { Signal } from "./signals.js";
 import type { SkillSummary } from "./skill-index.js";
 import { fenceUntrusted } from "./prompt-safety.js";
 import { isSafeSlug } from "./queue.js";
+import { CHILD_ENV_EXACT, CHILD_ENV_PREFIXES } from "./child-env.js";
+import { activeHost } from "./host/index.js";
+import { runOpencodeCli } from "./host/opencode.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -242,23 +245,30 @@ function failureStderr(raw: string): string {
  */
 export function claudeErrorReason(err: unknown): string {
   const e = err as {
+    cli?: string;
     code?: string | number;
     killed?: boolean;
     signal?: string;
     stderr?: string;
     message?: string;
   };
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
+  // which CLI failed: the OpenCode runner tags its errors, and an untagged one is claude's
+  const cli = e?.cli === "opencode" ? "opencode" : "claude";
+  if (e?.code === "ENOENT") {
+    return cli === "opencode"
+      ? "opencode CLI not found on PATH (install OpenCode or fix PATH) - run /handbook:doctor"
+      : "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
+  }
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
   // Nothing usable on stderr: report what the PROCESS did, never the model's own
   // output. That output is derived from session text and this string reaches pipeline.log.
-  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
-  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
-  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
-  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
+  if (e?.killed) return `${cli} timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor`;
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return `${cli} wrote past the ${cli === "opencode" ? "4" : "1"} MB output cap - run /handbook:doctor`;
+  if (typeof e?.code === "number") return `${cli} exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `${cli} was killed by ${e.signal} - run /handbook:doctor`;
   const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
-  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
+  if (/^Command failed:\s*(claude|opencode)\b/.test(firstLine)) return `${cli} invocation failed (run /handbook:doctor)`;
   return firstLine.slice(0, 200);
 }
 
@@ -377,46 +387,6 @@ export function childIsolationArgsFor(helpText: string): string[] {
 export function helpFormatRecognized(helpText: string): boolean {
   return declaredOptions(helpText).size > 0;
 }
-
-// What the child is allowed to inherit, and nothing else. A payload that asks the model to
-// list its environment can then only find what is on this list.
-//
-// The first version of this list was written from memory and was too narrow: it carried
-// ANTHROPIC_* but none of the cloud-backend families, so on a machine that authenticates
-// through Bedrock the harvest died with "Unable to locate credentials" while
-// /handbook:doctor - which was still passing the FULL environment - reported the CLI as
-// authenticated. Isolating the call and then certifying it through a different environment
-// is worse than not isolating it: the report says the path works when it does not.
-//
-// Grouped by the reason each name is here, because that reason is the only thing that
-// justifies adding the next one.
-const CHILD_ENV_EXACT = new Set([
-  // where the CLI, node and its config live
-  "PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG", "TZ",
-  // the Windows spelling of the same things
-  "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "SystemDrive", "COMSPEC", "PATHEXT",
-  // Windows spells the temp directory with these, not TMPDIR
-  "TEMP", "TMP",
-  // how it reaches the network at all, on a machine behind a proxy
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-  "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-  // how it trusts that network, where TLS is intercepted by a corporate CA
-  "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
-  // which region a Vertex deployment answers on
-  "CLOUD_ML_REGION",
-  // which handbook home this call belongs to
-  "TEAMHANDBOOK_HOME",
-]);
-
-// Whole families that exist to carry the credentials and endpoints of ONE auth backend.
-// These do hold secrets, deliberately: the child cannot authenticate without them, and it
-// has no tool with which to send them anywhere.
-// CLOUDSDK_* is here because gcloud's own credential overrides live outside GOOGLE_*:
-// measured in the installed binary as CLOUDSDK_AUTH_ACCESS_TOKEN,
-// CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE and others.
-const CHILD_ENV_PREFIXES = [
-  "LC_", "ANTHROPIC_", "AWS_", "GOOGLE_", "GCLOUD_", "CLOUDSDK_", "AZURE_",
-];
 
 /**
  * CLAUDE_* is NOT passed as a family, and that is the point of listing it separately.
@@ -589,6 +559,14 @@ export const runClaudeCli: ClaudeRunner = async (prompt, model, timeoutMs) => {
   }
 };
 
+/**
+ * The model call every engine path makes, sent to the CLI of the host this runs under.
+ * Callers take this rather than a host's runner, so a second host is one branch here and
+ * not a choice each of them has to get right.
+ */
+export const runModelCli: ClaudeRunner = (prompt, model, timeoutMs) =>
+  activeHost() === "opencode" ? runOpencodeCli(prompt, model, timeoutMs) : runClaudeCli(prompt, model, timeoutMs);
+
 export interface GateVerdict {
   signal: Signal;
   outcome: "promote" | "reject" | "error";
@@ -600,7 +578,7 @@ export async function scoreSignal(
   signal: Signal,
   occurrences: number,
   config: ScoreConfig = defaultScoreConfig,
-  runner: ClaudeRunner = runClaudeCli,
+  runner: ClaudeRunner = runModelCli,
   existingSkills: SkillSummary[] = [],
 ): Promise<GateVerdict> {
   let response: string;

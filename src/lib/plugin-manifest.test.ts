@@ -83,7 +83,9 @@ const HOOK_TYPES = ["command", "prompt"];
 // comes with the review path it feeds, and until then a command would put in front of users
 // shapes that nothing yet turns into a skill. The failure message names this set, because
 // the cheapest wrong fix for that failure is inventing a slash command nobody asked for.
-const CLI_WITHOUT_COMMAND = new Set(["run-pipeline", "mine"]);
+// opencode-install is run from a shell before OpenCode has any TeamHandbook command, and a
+// Claude Code slash command that installs OpenCode's would reach nobody who needs it.
+const CLI_WITHOUT_COMMAND = new Set(["run-pipeline", "mine", "opencode-install"]);
 
 // Not every shipped bundle is named in a manifest. run-pipeline.js is resolved at runtime
 // from the calling bundle's own location, so a build that stops emitting it breaks the

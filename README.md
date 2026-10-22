@@ -149,6 +149,32 @@ Two commands, and whoever set the repository up can send them to you already fil
 `/handbook:init` prints that message for them. The team's own plugin carries a small hook
 that tells you when new skills, servers, or commands have landed.
 
+### Using it from OpenCode
+
+Listing, drafting and reviewing work from [OpenCode](https://opencode.ai) too. Clone this
+repository somewhere it can stay, then install the commands:
+
+```
+git clone https://github.com/AhmetErenLapanta/TeamHandbook
+node TeamHandbook/dist/opencode-install.js
+```
+
+That writes `/handbook/mine`, `/handbook/review`, `/handbook/status`, `/handbook/doctor`
+and `/handbook/demo` into `~/.config/opencode/commands/handbook/` (`--project <path>` puts
+them in one project's `.opencode/` instead, and `--remove` takes them out again). A
+draft is written by your own `opencode run`, isolated the same way as `claude -p`
+([what that means](SECURITY.md#the-model-call-under-opencode)). TeamHandbook asks for its
+models by Claude Code's names, so map them in `~/.teamhandbook/config.json` if you want
+particular ones:
+
+```json
+{ "opencode": { "models": { "sonnet": "anthropic/claude-sonnet-5-5", "haiku": "anthropic/claude-haiku-5-5" } } }
+```
+
+An unmapped name uses the model your OpenCode config names. A skill you add to a project
+lands in its `.claude/skills/`, which OpenCode reads as it is. Capturing lessons from your
+sessions, and the team repository, are Claude Code only for now.
+
 ### Check the install
 
 `/handbook:doctor` reports node, the `claude` CLI TeamHandbook shells out to, whether the

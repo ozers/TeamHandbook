@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createDemo, demoListing, draftDemoWorkflow, isDemoRepo } from "../lib/demo.js";
+import { hostCli } from "../lib/host/index.js";
 
 // The recorded draft sits at the plugin root rather than inside the bundle, as a SKILL.md anyone
 // can open and read before trusting the demo, and the test holding it to the format gate reads
@@ -13,7 +14,7 @@ const USAGE = `usage: node dist/demo.js start
 
 start builds a scratch repository and lists the work its history repeats; nothing is sent.
 recorded drafts the first workflow from a draft that ships with the plugin; nothing is sent.
-live drafts it with your own claude CLI, which is one model call.`;
+live drafts it with your own ${hostCli()} CLI, which is one model call.`;
 
 async function main(): Promise<number> {
   const [verb, repo, ...extra] = process.argv.slice(2);
@@ -34,7 +35,7 @@ async function main(): Promise<number> {
     );
     return 2;
   }
-  if (verb === "live") console.log("Drafting the first workflow: this sends its screened evidence to your claude CLI.");
+  if (verb === "live") console.log(`Drafting the first workflow: this sends its screened evidence to your ${hostCli()} CLI.`);
   const outcome = await draftDemoWorkflow(repo, verb === "recorded" ? async () => readFileSync(RECORDED, "utf8") : undefined);
   if (!outcome.ok) {
     console.error(

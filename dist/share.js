@@ -637,10 +637,40 @@ var init_queue = __esm({
   }
 });
 
-// src/lib/score.ts
+// src/lib/child-env.ts
+var init_child_env = __esm({
+  "src/lib/child-env.ts"() {
+    "use strict";
+  }
+});
+
+// src/lib/host/index.ts
+var init_host = __esm({
+  "src/lib/host/index.ts"() {
+    "use strict";
+    init_config();
+    init_session_state();
+  }
+});
+
+// src/lib/host/opencode.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync;
+var init_opencode = __esm({
+  "src/lib/host/opencode.ts"() {
+    "use strict";
+    init_child_env();
+    init_config();
+    init_session_state();
+    execFileAsync = promisify(execFile);
+  }
+});
+
+// src/lib/score.ts
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+var execFileAsync2;
 var init_score = __esm({
   "src/lib/score.ts"() {
     "use strict";
@@ -648,7 +678,10 @@ var init_score = __esm({
     init_config();
     init_prompt_safety();
     init_queue();
-    execFileAsync = promisify(execFile);
+    init_child_env();
+    init_host();
+    init_opencode();
+    execFileAsync2 = promisify2(execFile2);
   }
 });
 

@@ -1132,6 +1132,250 @@ var init_queue = __esm({
   }
 });
 
+// src/lib/child-env.ts
+var CHILD_ENV_EXACT, CHILD_ENV_PREFIXES;
+var init_child_env = __esm({
+  "src/lib/child-env.ts"() {
+    "use strict";
+    CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
+      // where the CLI, node and its config live
+      "PATH",
+      "HOME",
+      "USER",
+      "SHELL",
+      "TMPDIR",
+      "LANG",
+      "TZ",
+      // the Windows spelling of the same things
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "SystemRoot",
+      "SystemDrive",
+      "COMSPEC",
+      "PATHEXT",
+      // Windows spells the temp directory with these, not TMPDIR
+      "TEMP",
+      "TMP",
+      // how it reaches the network at all, on a machine behind a proxy
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      // how it trusts that network, where TLS is intercepted by a corporate CA
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "NODE_EXTRA_CA_CERTS",
+      "REQUESTS_CA_BUNDLE",
+      // which region a Vertex deployment answers on
+      "CLOUD_ML_REGION",
+      // which handbook home this call belongs to
+      "TEAMHANDBOOK_HOME"
+    ]);
+    CHILD_ENV_PREFIXES = [
+      "LC_",
+      "ANTHROPIC_",
+      "AWS_",
+      "GOOGLE_",
+      "GCLOUD_",
+      "CLOUDSDK_",
+      "AZURE_"
+    ];
+  }
+});
+
+// src/lib/host/index.ts
+function isHostName(value) {
+  return typeof value === "string" && HOST_NAMES.includes(value);
+}
+function activeHost(env = process.env, home = handbookHome()) {
+  if (isHostName(env.TEAMHANDBOOK_HOST)) return env.TEAMHANDBOOK_HOST;
+  const configured = readConfigFile(home).host;
+  if (isHostName(configured)) return configured;
+  return "claude-code";
+}
+var HOST_NAMES;
+var init_host = __esm({
+  "src/lib/host/index.ts"() {
+    "use strict";
+    init_config();
+    init_session_state();
+    HOST_NAMES = ["claude-code", "opencode"];
+  }
+});
+
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { mkdirSync as mkdirSync4, mkdtempSync, readFileSync as readFileSync3, rmSync as rmSync2 } from "node:fs";
+import { homedir as homedir3, tmpdir as tmpdir2 } from "node:os";
+import { join as join6 } from "node:path";
+import { promisify } from "node:util";
+function stripJsonc(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 2;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function opencodeConfigDir(env = process.env) {
+  return join6(env.XDG_CONFIG_HOME || join6(homedir3(), ".config"), "opencode");
+}
+function carriedUserConfig(configDir = opencodeConfigDir()) {
+  const carried = {};
+  for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
+    let parsed;
+    try {
+      parsed = JSON.parse(stripJsonc(readFileSync3(join6(configDir, name), "utf8")));
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(parsed)) continue;
+    for (const key of CARRIED_CONFIG_KEYS) {
+      if (parsed[key] !== void 0) carried[key] = parsed[key];
+    }
+  }
+  return carried;
+}
+function opencodeModel(alias, home = handbookHome()) {
+  const section = readConfigFile(home).opencode;
+  const models = isPlainObject(section) && isPlainObject(section.models) ? section.models : {};
+  const mapped = models[alias];
+  if (typeof mapped === "string" && mapped.includes("/")) return mapped;
+  return alias.includes("/") ? alias : "";
+}
+function opencodeChildEnv(scratch, config, source = process.env) {
+  const env = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0 || name.startsWith("OPENCODE_")) continue;
+    if (CHILD_ENV_EXACT.has(name) || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p)) || PROVIDER_KEY.test(name) || REAL_DIRS.includes(name)) {
+      env[name] = value;
+    }
+  }
+  env.XDG_CONFIG_HOME = join6(scratch, "config");
+  env.OPENCODE_TEST_HOME = join6(scratch, "home");
+  env.OPENCODE_DB = join6(scratch, "child.db");
+  Object.assign(env, CHILD_SWITCHES);
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, permission: DENY_ALL_TOOLS });
+  return env;
+}
+function opencodeInvocation(input) {
+  const scratch = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
+  const cwd = join6(scratch, "work");
+  for (const dir of [cwd, join6(scratch, "config"), join6(scratch, "home")]) mkdirSync4(dir);
+  const source = input.source ?? process.env;
+  const model = opencodeModel(input.model, input.home);
+  const args = ["run", "--pure", "--format", "json", "--dir", cwd];
+  if (model) args.push("-m", model);
+  return {
+    args,
+    input: input.prompt,
+    env: opencodeChildEnv(scratch, carriedUserConfig(opencodeConfigDir(source)), source),
+    cwd,
+    done: () => rmSync2(scratch, { recursive: true, force: true })
+  };
+}
+function parseRunOutput(stdout) {
+  const texts = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(event)) continue;
+    if (event.type === "error") {
+      throw Object.assign(new Error("opencode reported an error"), { cli: "opencode", stderr: errorText(event) });
+    }
+    if (event.type !== "text" || !isPlainObject(event.part)) continue;
+    if (event.part.synthetic === true) continue;
+    if (typeof event.part.text === "string") texts.push(event.part.text);
+  }
+  const reply = texts.join("\n").trim();
+  if (!reply) throw Object.assign(new Error("opencode returned no text"), { cli: "opencode", stderr: "opencode returned no text" });
+  return reply;
+}
+function errorText(event) {
+  const error = event.error;
+  if (typeof error === "string") return error.slice(0, 200);
+  if (isPlainObject(error)) {
+    const data = isPlainObject(error.data) ? error.data : {};
+    const message = typeof data.message === "string" ? data.message : error.name;
+    if (typeof message === "string") return message.slice(0, 200);
+  }
+  return "opencode reported an error";
+}
+var execFileAsync, CARRIED_CONFIG_KEYS, DENY_ALL_TOOLS, CHILD_SWITCHES, PROVIDER_KEY, REAL_DIRS, runOpencodeCli;
+var init_opencode = __esm({
+  "src/lib/host/opencode.ts"() {
+    "use strict";
+    init_child_env();
+    init_config();
+    init_session_state();
+    execFileAsync = promisify(execFile);
+    CARRIED_CONFIG_KEYS = ["model", "small_model", "provider", "enabled_providers", "disabled_providers"];
+    DENY_ALL_TOOLS = { "*": "deny" };
+    CHILD_SWITCHES = {
+      OPENCODE_PURE: "1",
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1"
+    };
+    PROVIDER_KEY = /_API_KEY$/;
+    REAL_DIRS = ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"];
+    runOpencodeCli = async (prompt, model, timeoutMs) => {
+      const invocation = opencodeInvocation({ prompt, model });
+      const call = execFileAsync("opencode", invocation.args, {
+        timeout: timeoutMs,
+        // every event line repeats its whole part, so the stream is a few times the reply
+        maxBuffer: 4 * 1024 * 1024,
+        cwd: invocation.cwd,
+        env: invocation.env
+      });
+      const stdin = call.child.stdin;
+      if (stdin) {
+        stdin.on("error", () => {
+        });
+        stdin.end(invocation.input);
+      }
+      try {
+        const { stdout } = await call;
+        return parseRunOutput(stdout);
+      } catch (err) {
+        if (typeof err === "object" && err !== null) Object.assign(err, { cli: "opencode" });
+        throw err;
+      } finally {
+        invocation.done();
+      }
+    };
+  }
+});
+
 // src/lib/score.ts
 var score_exports = {};
 __export(score_exports, {
@@ -1149,13 +1393,14 @@ __export(score_exports, {
   loadScoreConfig: () => loadScoreConfig,
   parseScoreResponse: () => parseScoreResponse,
   runClaudeCli: () => runClaudeCli,
+  runModelCli: () => runModelCli,
   scoreSignal: () => scoreSignal
 });
-import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { join as join6 } from "node:path";
-import { promisify } from "node:util";
+import { execFile as execFile2 } from "node:child_process";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join7 } from "node:path";
+import { promisify as promisify2 } from "node:util";
 function gateAutoEnabled(home = handbookHome()) {
   if (configIsBroken(home)) return false;
   const gate = readConfigFile(home).gate;
@@ -1274,20 +1519,23 @@ function failureStderr(raw) {
 }
 function claudeErrorReason(err) {
   const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
+  const cli = e?.cli === "opencode" ? "opencode" : "claude";
+  if (e?.code === "ENOENT") {
+    return cli === "opencode" ? "opencode CLI not found on PATH (install OpenCode or fix PATH) - run /handbook:doctor" : "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
+  }
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
-  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
-  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
-  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
-  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
+  if (e?.killed) return `${cli} timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor`;
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return `${cli} wrote past the ${cli === "opencode" ? "4" : "1"} MB output cap - run /handbook:doctor`;
+  if (typeof e?.code === "number") return `${cli} exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `${cli} was killed by ${e.signal} - run /handbook:doctor`;
   const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
-  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
+  if (/^Command failed:\s*(claude|opencode)\b/.test(firstLine)) return `${cli} invocation failed (run /handbook:doctor)`;
   return firstLine.slice(0, 200);
 }
 async function claudeHelpText() {
   try {
-    const { stdout } = await execFileAsync("claude", ["--help"], { timeout: 15e3 });
+    const { stdout } = await execFileAsync2("claude", ["--help"], { timeout: 15e3 });
     return stdout;
   } catch {
     return "";
@@ -1342,16 +1590,16 @@ function childInvocation(input) {
   const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
-  const cwd = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
+  const cwd = mkdtempSync2(join7(tmpdir3(), "teamhandbook-child-"));
   return {
     args,
     input: input.prompt,
     env: childEnv(),
     cwd,
-    done: () => rmSync2(cwd, { recursive: true, force: true })
+    done: () => rmSync3(cwd, { recursive: true, force: true })
   };
 }
-async function scoreSignal(signal, occurrences, config = defaultScoreConfig, runner = runClaudeCli, existingSkills = []) {
+async function scoreSignal(signal, occurrences, config = defaultScoreConfig, runner = runModelCli, existingSkills = []) {
   let response;
   try {
     response = await runner(
@@ -1366,7 +1614,7 @@ async function scoreSignal(signal, occurrences, config = defaultScoreConfig, run
   if (!result) return { signal, outcome: "error", error: "unparseable score response" };
   return { signal, outcome: result.pass ? "promote" : "reject", result };
 }
-var execFileAsync, CRITERIA, defaultScoreConfig, BENIGN_CLAUDE_WARNING, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_EXACT, CHILD_ENV_PREFIXES, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER, runClaudeCli;
+var execFileAsync2, CRITERIA, defaultScoreConfig, BENIGN_CLAUDE_WARNING, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER, runClaudeCli, runModelCli;
 var init_score = __esm({
   "src/lib/score.ts"() {
     "use strict";
@@ -1374,7 +1622,10 @@ var init_score = __esm({
     init_config();
     init_prompt_safety();
     init_queue();
-    execFileAsync = promisify(execFile);
+    init_child_env();
+    init_host();
+    init_opencode();
+    execFileAsync2 = promisify2(execFile2);
     CRITERIA = [
       "recurrence",
       "unfindability",
@@ -1390,54 +1641,6 @@ var init_score = __esm({
     BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
     CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
     CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
-    CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
-      // where the CLI, node and its config live
-      "PATH",
-      "HOME",
-      "USER",
-      "SHELL",
-      "TMPDIR",
-      "LANG",
-      "TZ",
-      // the Windows spelling of the same things
-      "USERPROFILE",
-      "APPDATA",
-      "LOCALAPPDATA",
-      "SystemRoot",
-      "SystemDrive",
-      "COMSPEC",
-      "PATHEXT",
-      // Windows spells the temp directory with these, not TMPDIR
-      "TEMP",
-      "TMP",
-      // how it reaches the network at all, on a machine behind a proxy
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "NO_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "no_proxy",
-      // how it trusts that network, where TLS is intercepted by a corporate CA
-      "SSL_CERT_FILE",
-      "SSL_CERT_DIR",
-      "NODE_EXTRA_CA_CERTS",
-      "REQUESTS_CA_BUNDLE",
-      // which region a Vertex deployment answers on
-      "CLOUD_ML_REGION",
-      // which handbook home this call belongs to
-      "TEAMHANDBOOK_HOME"
-    ]);
-    CHILD_ENV_PREFIXES = [
-      "LC_",
-      "ANTHROPIC_",
-      "AWS_",
-      "GOOGLE_",
-      "GCLOUD_",
-      "CLOUDSDK_",
-      "AZURE_"
-    ];
     CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
       // which backend answers at all
       "CLAUDE_CODE_USE_BEDROCK",
@@ -1481,7 +1684,7 @@ var init_score = __esm({
     ];
     runClaudeCli = async (prompt, model, timeoutMs) => {
       const invocation = childInvocation({ prompt, model, helpText: await claudeHelpText() });
-      const call = execFileAsync("claude", invocation.args, {
+      const call = execFileAsync2("claude", invocation.args, {
         timeout: timeoutMs,
         maxBuffer: 1024 * 1024,
         cwd: invocation.cwd,
@@ -1500,6 +1703,7 @@ var init_score = __esm({
         invocation.done();
       }
     };
+    runModelCli = (prompt, model, timeoutMs) => activeHost() === "opencode" ? runOpencodeCli(prompt, model, timeoutMs) : runClaudeCli(prompt, model, timeoutMs);
   }
 });
 
@@ -3658,16 +3862,16 @@ function extractSkill(reply) {
   return start === -1 ? body.trim() || null : body.slice(start).trim() || null;
 }
 var defaultDraftRunner = async (prompt) => {
-  const { runClaudeCli: runClaudeCli2 } = await Promise.resolve().then(() => (init_score(), score_exports));
-  return runClaudeCli2(prompt, DRAFT_MODEL, DRAFT_TIMEOUT_MS);
+  const { runModelCli: runModelCli2 } = await Promise.resolve().then(() => (init_score(), score_exports));
+  return runModelCli2(prompt, DRAFT_MODEL, DRAFT_TIMEOUT_MS);
 };
 var DRAFT_MODEL = "sonnet";
 var DRAFT_TIMEOUT_MS = 3e5;
 
 // src/lib/session-workflow.ts
-import { appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync3, realpathSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync4, realpathSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
 init_config();
-import { basename as basename4, dirname as dirname4, join as join7, relative, resolve, sep } from "node:path";
+import { basename as basename4, dirname as dirname4, join as join8, relative, resolve, sep } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -3685,7 +3889,7 @@ init_secrets();
 init_fs_atomic();
 init_session_state();
 function minedRecordFile(home = handbookHome()) {
-  return join7(home, "mined-workflows.json");
+  return join8(home, "mined-workflows.json");
 }
 function sessionDetectEnabled(home = handbookHome()) {
   const sessions = readConfigFile(home).sessions;
@@ -3694,12 +3898,12 @@ function sessionDetectEnabled(home = handbookHome()) {
 function repositoryOf(dir) {
   let at = resolve(dir);
   for (; ; ) {
-    const dotgit = join7(at, ".git");
+    const dotgit = join8(at, ".git");
     try {
       const stat = statSync(dotgit);
       if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
       if (stat.isFile()) {
-        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync3(dotgit, "utf8"));
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync4(dotgit, "utf8"));
         if (pointer) {
           const gitdir = resolve(at, pointer[1].trim());
           const marker = `${sep}.git${sep}worktrees${sep}`;
@@ -3745,8 +3949,8 @@ function saveMinedRecord(repoPaths2, collection, shapes, home = handbookHome(), 
 }
 
 // src/lib/mine-command.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -3889,10 +4093,10 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     return { ok: false, rank: workflow.rank, reasons: ["no-frontmatter"] };
   }
   const base = candidatesDir(home);
-  const slug = uniqueSlug(summary.name, (s) => existsSync3(join8(base, s)));
-  const dir = join8(base, slug);
-  mkdirSync5(dir, { recursive: true });
-  writeFileSync4(join8(dir, "SKILL.md"), result.skill);
+  const slug = uniqueSlug(summary.name, (s) => existsSync3(join9(base, s)));
+  const dir = join9(base, slug);
+  mkdirSync6(dir, { recursive: true });
+  writeFileSync4(join9(dir, "SKILL.md"), result.skill);
   const trace = identityInSkillDir(dir);
   const root = checkoutRoot(cwd);
   const meta = {

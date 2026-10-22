@@ -189,8 +189,8 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
 
 // src/lib/identity.ts
 import { execFileSync } from "node:child_process";
@@ -515,8 +515,13 @@ function signalSecret(fields) {
   );
 }
 
-// src/lib/score.ts
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+
+// src/lib/score.ts
+var execFileAsync2 = promisify2(execFile2);
 function gateAutoEnabled(home = handbookHome()) {
   if (configIsBroken(home)) return false;
   const gate = readConfigFile(home).gate;

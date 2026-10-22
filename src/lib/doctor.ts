@@ -19,6 +19,9 @@ import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
 import { lastPipelineRun, newerRelease, newerReleaseLine, pluginRoot, pluginVersion } from "./status.js";
 import { displayPath } from "./display-path.js";
+import { activeHost, unknownHostSetting } from "./host/index.js";
+import type { HostName } from "./host/index.js";
+import { opencodeInvocation, parseRunOutput } from "./host/opencode.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
 
@@ -224,6 +227,118 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
           "child session tool restriction unsupported by this claude version - the harvest still runs, but its model call gets this machine's tools, MCP servers and settings; upgrade Claude Code to restrict it",
         ),
   ];
+}
+
+/**
+ * The OpenCode release the child's isolation switches were read from. Every one of them is
+ * an environment variable or flag in OpenCode's source, not a documented contract, and
+ * OPENCODE_TEST_HOME is a test hook outright, so a different release is said out loud
+ * rather than trusted.
+ */
+const OPENCODE_READ_FROM = { major: 1, minor: 19 };
+
+function opencodeVersionNote(versionText: string): string | null {
+  const match = /(\d+)\.(\d+)\.(\d+)/.exec(versionText);
+  if (!match) return `could not read a version from \`opencode --version\` ("${versionText.slice(0, 40)}")`;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (major === OPENCODE_READ_FROM.major && minor >= OPENCODE_READ_FROM.minor) return null;
+  return `v${match[0]}: the switches that isolate the model call were read from v${OPENCODE_READ_FROM.major}.${OPENCODE_READ_FROM.minor}, so whether this release still honours them is unverified`;
+}
+
+/**
+ * The OpenCode counterpart of checkClaudeCli, built the same way: the CLI line and the
+ * isolation line come out of one real call through the invocation the harvest uses.
+ */
+function checkOpencodeCli(run: CommandRunner, home: string): DoctorCheck[] {
+  const unknownIsolation = warn(
+    "model call isolation",
+    "not established: the `opencode CLI` check above did not get a successful call",
+  );
+  let versionText: string;
+  try {
+    versionText = run("opencode", ["--version"], 15_000);
+  } catch (err) {
+    if ((err as { code?: string })?.code === "ENOENT") {
+      return [fail("opencode CLI", "not found on PATH - drafting needs it; install OpenCode or fix PATH"), unknownIsolation];
+    }
+    const message = String(err instanceof Error ? err.message : err).split("\n")[0];
+    return [fail("opencode CLI", `found, but \`opencode --version\` failed or timed out: ${message}`), unknownIsolation];
+  }
+  const harvestModel = loadHarvestConfig(home).model;
+  const gateModel = loadScoreConfig(home).model;
+  const distillModel = loadDistillConfig(home).model;
+  const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
+  for (const model of models) {
+    const invocation = opencodeInvocation({ prompt: "Reply with exactly: OK", model: model ?? "", home });
+    try {
+      const reply = parseRunOutput(
+        run("opencode", invocation.args, PROBE_TIMEOUT_MS, {
+          env: invocation.env,
+          cwd: invocation.cwd,
+          input: invocation.input,
+        }),
+      );
+      if (!/\bok\b/i.test(reply)) {
+        return [
+          warn("opencode CLI", `installed, but a probe for "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`),
+          unknownIsolation,
+        ];
+      }
+    } catch (err) {
+      const message = String((err as { stderr?: unknown })?.stderr || (err instanceof Error ? err.message : err));
+      const mapped = invocation.args.includes("-m")
+        ? `model ${invocation.args[invocation.args.indexOf("-m") + 1]}`
+        : `"${model}" (unmapped, so OpenCode's own default model; map it in config.json opencode.models)`;
+      return [
+        fail(
+          "opencode CLI",
+          `the isolated \`opencode run\` with ${mapped} failed - is a provider logged in (\`opencode auth login\`) and does the model exist? ${(message.split("\n")[0] ?? "").slice(0, 120)}`,
+        ),
+        unknownIsolation,
+      ];
+    } finally {
+      invocation.done();
+    }
+  }
+  const versionNote = opencodeVersionNote(versionText);
+  return [
+    ok(
+      "opencode CLI",
+      models.length > 1 ? `installed and answering (${models.length} configured models reachable)` : "installed and answering",
+    ),
+    versionNote
+      ? warn("model call isolation", versionNote)
+      : ok(
+          "model call isolation",
+          "verified by a real call: tools denied, no plugins, no MCP servers, no global or project config beyond the model and provider, an empty working directory",
+        ),
+  ];
+}
+
+/**
+ * Where a skill added to the project goes, and whether this host will find it there. OpenCode
+ * reads `.claude/skills` itself, so delivery is the same files; the one way to lose them is
+ * the switch that turns that compatibility off.
+ */
+function checkProjectSkillsSeen(env: NodeJS.ProcessEnv = process.env): DoctorCheck {
+  const off = ["OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"].find(
+    (name) => env[name] && env[name] !== "0" && env[name] !== "false",
+  );
+  return off
+    ? warn("skill discovery", `${off} is set, so OpenCode ignores .claude/skills - skills TeamHandbook adds to a project or to you will not load until it is unset`)
+    : ok("skill discovery", "OpenCode reads .claude/skills, where TeamHandbook delivers project and personal skills");
+}
+
+function checkHost(home: string): DoctorCheck | null {
+  const unknown = unknownHostSetting(process.env, home);
+  return unknown
+    ? warn("host", `${unknown} is not a host this version knows (claude-code, opencode) - running as Claude Code`)
+    : null;
+}
+
+function checkCli(host: HostName, run: CommandRunner, home: string): DoctorCheck[] {
+  return host === "opencode" ? checkOpencodeCli(run, home) : checkClaudeCli(run, home);
 }
 
 function checkGitIdentity(home: string, run: CommandRunner): DoctorCheck | null {
@@ -601,13 +716,18 @@ export function runDoctor(
 ): DoctorReport {
   const version = pluginVersion();
   const release = checkRelease(version, run, marketRoot, root);
+  const host = activeHost(process.env, home);
+  const hostCheck = checkHost(home);
   const checks: DoctorCheck[] = [
     ...(release ? [release] : []),
+    ...(hostCheck ? [hostCheck] : []),
     checkNode(),
-    ...checkClaudeCli(run, home),
+    ...checkCli(host, run, home),
     checkHomeWritable(home),
     checkConfig(home),
-    checkHooks(home),
+    // OpenCode has no hooks wired yet: listing and drafting from history need none, and a
+    // "no hook events recorded" warning would send the reader looking for a fault
+    host === "opencode" ? checkProjectSkillsSeen() : checkHooks(home),
   ];
   const teamRepo = checkTeamRepo(home, run);
   checks.push(teamRepo.check);

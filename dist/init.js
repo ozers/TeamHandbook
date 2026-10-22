@@ -71,8 +71,8 @@ import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as rea
 import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
 
 // src/lib/identity.ts
 import { execFileSync } from "node:child_process";
@@ -384,8 +384,13 @@ function locateSecret(text) {
   return null;
 }
 
-// src/lib/score.ts
+// src/lib/host/opencode.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+
+// src/lib/score.ts
+var execFileAsync2 = promisify2(execFile2);
 
 // src/lib/distill.ts
 function normalizeRemoteUrl(raw) {

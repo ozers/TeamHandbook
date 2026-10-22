@@ -6,3 +6,6 @@ package-lock.json
 npm-shrinkwrap.json
 bun.lock
 bun.lockb
+# OpenCode project config: `opencode-install.js --project .` writes commands holding this
+# machine's checkout path, and OpenCode installs node_modules into it
+.opencode/

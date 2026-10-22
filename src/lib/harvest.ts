@@ -6,7 +6,7 @@ import { fenceUntrusted } from "./prompt-safety.js";
 import { signalSecret } from "./secrets.js";
 import { detectIdentity, maskIdentity } from "./identity.js";
 import { maybeDumpPayload } from "./counters.js";
-import { claudeErrorReason, runClaudeCli } from "./score.js";
+import { claudeErrorReason, runModelCli } from "./score.js";
 import { matchTokens, recordAndMatchTeachings, sameTeaching } from "./teachings.js";
 import type { Echo } from "./teachings.js";
 import type { ClaudeRunner } from "./score.js";
@@ -748,7 +748,7 @@ export async function harvestSession(
   deps: HarvestDeps = {},
 ): Promise<HarvestSummary> {
   const config = loadHarvestConfig(home);
-  const runner = deps.runner ?? runClaudeCli;
+  const runner = deps.runner ?? runModelCli;
   const now = deps.now ?? (() => new Date().toISOString());
 
   const { slice: readSlice, redacted } = job.transcriptPath

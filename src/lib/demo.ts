@@ -7,6 +7,7 @@ import { collectUnits, shapesFromUnits } from "./mine.js";
 import { draftWorkflow, listWorkflows, unitIndexFor, workflowEntries, workflowsFromShapes } from "./mine-command.js";
 import type { DraftOutcome } from "./mine-command.js";
 import { handbookHome } from "./session-state.js";
+import { hostCli } from "./host/index.js";
 
 /**
  * The guided demo's scratch repository: an invented shop API whose history repeats one piece of
@@ -192,7 +193,7 @@ export function demoListing(repo: string, script: string): string {
     "      has to pass. No model call.",
     "",
     `  node "${script}" live "${repo}"`,
-    "      a fresh draft from your own claude CLI. One model call, about a minute.",
+    `      a fresh draft from your own ${hostCli()} CLI. One model call, about a minute.`,
   ].join("\n");
 }
 

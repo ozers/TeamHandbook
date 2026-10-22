@@ -762,3 +762,54 @@ describe("doctor team plugin copy check", () => {
     expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
   });
 });
+
+describe("doctor under OpenCode", () => {
+  let originalHost: string | undefined;
+  beforeEach(() => {
+    originalHost = process.env.TEAMHANDBOOK_HOST;
+    process.env.TEAMHANDBOOK_HOST = "opencode";
+  });
+  afterEach(() => {
+    if (originalHost === undefined) delete process.env.TEAMHANDBOOK_HOST;
+    else process.env.TEAMHANDBOOK_HOST = originalHost;
+  });
+
+  const OK_EVENT = JSON.stringify({ type: "text", part: { text: "OK" } });
+
+  function opencodeRunner(version: string, reply: () => string): CommandRunner {
+    return (cmd, args) => {
+      if (cmd === "opencode") return args[0] === "--version" ? version : reply();
+      if (cmd === "claude") throw new Error("claude must not be probed under OpenCode");
+      if (cmd === "git") return args[0] === "config" ? "me@example.com" : "abc\trefs/heads/main";
+      throw new Error(`unexpected command ${cmd}`);
+    };
+  }
+
+  it("given a current opencode that answers, when the doctor runs, then the CLI and its isolation are verified and claude is never called", () => {
+    const report = runDoctor(home, opencodeRunner("1.19.4", () => OK_EVENT));
+    expect(byName(report, "opencode CLI")?.level).toBe("ok");
+    expect(byName(report, "model call isolation")?.level).toBe("ok");
+    expect(byName(report, "claude CLI")).toBeUndefined();
+    expect(byName(report, "hooks")).toBeUndefined();
+    expect(byName(report, "skill discovery")).toBeDefined();
+  });
+
+  it("given an opencode release the switches were not read from, when the doctor runs, then isolation is a warning", () => {
+    const report = runDoctor(home, opencodeRunner("2.0.1", () => OK_EVENT));
+    expect(byName(report, "model call isolation")?.level).toBe("warn");
+    expect(byName(report, "model call isolation")?.detail).toContain("v2.0.1");
+  });
+
+  it("given no opencode on PATH, when the doctor runs, then it fails naming opencode", () => {
+    const missing: CommandRunner = (cmd, args, timeout, options) => {
+      if (cmd === "opencode") throw Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" });
+      return opencodeRunner("1.19.4", () => OK_EVENT)(cmd, args, timeout, options);
+    };
+    expect(byName(runDoctor(home, missing), "opencode CLI")?.level).toBe("fail");
+  });
+
+  it("given a run that prints no text, when the doctor probes, then the CLI check fails", () => {
+    const report = runDoctor(home, opencodeRunner("1.19.4", () => JSON.stringify({ type: "step_finish", part: {} })));
+    expect(byName(report, "opencode CLI")?.level).toBe("fail");
+  });
+});

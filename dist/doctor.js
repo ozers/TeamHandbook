@@ -426,12 +426,242 @@ var init_queue = __esm({
   }
 });
 
-// src/lib/score.ts
+// src/lib/child-env.ts
+var CHILD_ENV_EXACT, CHILD_ENV_PREFIXES;
+var init_child_env = __esm({
+  "src/lib/child-env.ts"() {
+    "use strict";
+    CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
+      // where the CLI, node and its config live
+      "PATH",
+      "HOME",
+      "USER",
+      "SHELL",
+      "TMPDIR",
+      "LANG",
+      "TZ",
+      // the Windows spelling of the same things
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "SystemRoot",
+      "SystemDrive",
+      "COMSPEC",
+      "PATHEXT",
+      // Windows spells the temp directory with these, not TMPDIR
+      "TEMP",
+      "TMP",
+      // how it reaches the network at all, on a machine behind a proxy
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      // how it trusts that network, where TLS is intercepted by a corporate CA
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "NODE_EXTRA_CA_CERTS",
+      "REQUESTS_CA_BUNDLE",
+      // which region a Vertex deployment answers on
+      "CLOUD_ML_REGION",
+      // which handbook home this call belongs to
+      "TEAMHANDBOOK_HOME"
+    ]);
+    CHILD_ENV_PREFIXES = [
+      "LC_",
+      "ANTHROPIC_",
+      "AWS_",
+      "GOOGLE_",
+      "GCLOUD_",
+      "CLOUDSDK_",
+      "AZURE_"
+    ];
+  }
+});
+
+// src/lib/host/index.ts
+function isHostName(value) {
+  return typeof value === "string" && HOST_NAMES.includes(value);
+}
+function activeHost(env = process.env, home = handbookHome()) {
+  if (isHostName(env.TEAMHANDBOOK_HOST)) return env.TEAMHANDBOOK_HOST;
+  const configured = readConfigFile(home).host;
+  if (isHostName(configured)) return configured;
+  return "claude-code";
+}
+function unknownHostSetting(env = process.env, home = handbookHome()) {
+  const fromEnv = env.TEAMHANDBOOK_HOST;
+  if (fromEnv !== void 0 && fromEnv !== "" && !isHostName(fromEnv)) {
+    return `TEAMHANDBOOK_HOST=${fromEnv}`;
+  }
+  const configured = readConfigFile(home).host;
+  if (configured !== void 0 && !isHostName(configured)) {
+    return `config.json host: ${JSON.stringify(configured)}`;
+  }
+  return null;
+}
+var HOST_NAMES;
+var init_host = __esm({
+  "src/lib/host/index.ts"() {
+    "use strict";
+    init_config();
+    init_session_state();
+    HOST_NAMES = ["claude-code", "opencode"];
+  }
+});
+
+// src/lib/host/opencode.ts
 import { execFile } from "node:child_process";
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
+import { mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync2, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { homedir as homedir3, tmpdir as tmpdir2 } from "node:os";
 import { join as join4 } from "node:path";
 import { promisify } from "node:util";
+function stripJsonc(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 2;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function opencodeConfigDir(env = process.env) {
+  return join4(env.XDG_CONFIG_HOME || join4(homedir3(), ".config"), "opencode");
+}
+function carriedUserConfig(configDir = opencodeConfigDir()) {
+  const carried = {};
+  for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
+    let parsed;
+    try {
+      parsed = JSON.parse(stripJsonc(readFileSync4(join4(configDir, name), "utf8")));
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(parsed)) continue;
+    for (const key of CARRIED_CONFIG_KEYS) {
+      if (parsed[key] !== void 0) carried[key] = parsed[key];
+    }
+  }
+  return carried;
+}
+function opencodeModel(alias, home = handbookHome()) {
+  const section = readConfigFile(home).opencode;
+  const models = isPlainObject(section) && isPlainObject(section.models) ? section.models : {};
+  const mapped = models[alias];
+  if (typeof mapped === "string" && mapped.includes("/")) return mapped;
+  return alias.includes("/") ? alias : "";
+}
+function opencodeChildEnv(scratch, config, source = process.env) {
+  const env = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0 || name.startsWith("OPENCODE_")) continue;
+    if (CHILD_ENV_EXACT.has(name) || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p)) || PROVIDER_KEY.test(name) || REAL_DIRS.includes(name)) {
+      env[name] = value;
+    }
+  }
+  env.XDG_CONFIG_HOME = join4(scratch, "config");
+  env.OPENCODE_TEST_HOME = join4(scratch, "home");
+  env.OPENCODE_DB = join4(scratch, "child.db");
+  Object.assign(env, CHILD_SWITCHES);
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, permission: DENY_ALL_TOOLS });
+  return env;
+}
+function opencodeInvocation(input) {
+  const scratch = mkdtempSync2(join4(tmpdir2(), "teamhandbook-child-"));
+  const cwd = join4(scratch, "work");
+  for (const dir of [cwd, join4(scratch, "config"), join4(scratch, "home")]) mkdirSync3(dir);
+  const source = input.source ?? process.env;
+  const model = opencodeModel(input.model, input.home);
+  const args = ["run", "--pure", "--format", "json", "--dir", cwd];
+  if (model) args.push("-m", model);
+  return {
+    args,
+    input: input.prompt,
+    env: opencodeChildEnv(scratch, carriedUserConfig(opencodeConfigDir(source)), source),
+    cwd,
+    done: () => rmSync2(scratch, { recursive: true, force: true })
+  };
+}
+function parseRunOutput(stdout) {
+  const texts = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(event)) continue;
+    if (event.type === "error") {
+      throw Object.assign(new Error("opencode reported an error"), { cli: "opencode", stderr: errorText(event) });
+    }
+    if (event.type !== "text" || !isPlainObject(event.part)) continue;
+    if (event.part.synthetic === true) continue;
+    if (typeof event.part.text === "string") texts.push(event.part.text);
+  }
+  const reply = texts.join("\n").trim();
+  if (!reply) throw Object.assign(new Error("opencode returned no text"), { cli: "opencode", stderr: "opencode returned no text" });
+  return reply;
+}
+function errorText(event) {
+  const error = event.error;
+  if (typeof error === "string") return error.slice(0, 200);
+  if (isPlainObject(error)) {
+    const data = isPlainObject(error.data) ? error.data : {};
+    const message = typeof data.message === "string" ? data.message : error.name;
+    if (typeof message === "string") return message.slice(0, 200);
+  }
+  return "opencode reported an error";
+}
+var execFileAsync, CARRIED_CONFIG_KEYS, DENY_ALL_TOOLS, CHILD_SWITCHES, PROVIDER_KEY, REAL_DIRS;
+var init_opencode = __esm({
+  "src/lib/host/opencode.ts"() {
+    "use strict";
+    init_child_env();
+    init_config();
+    init_session_state();
+    execFileAsync = promisify(execFile);
+    CARRIED_CONFIG_KEYS = ["model", "small_model", "provider", "enabled_providers", "disabled_providers"];
+    DENY_ALL_TOOLS = { "*": "deny" };
+    CHILD_SWITCHES = {
+      OPENCODE_PURE: "1",
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1"
+    };
+    PROVIDER_KEY = /_API_KEY$/;
+    REAL_DIRS = ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"];
+  }
+});
+
+// src/lib/score.ts
+import { execFile as execFile2 } from "node:child_process";
+import { mkdtempSync as mkdtempSync3, rmSync as rmSync3 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join5 } from "node:path";
+import { promisify as promisify2 } from "node:util";
 function loadScoreConfig(home = handbookHome()) {
   const gate = readConfigFile(home).gate;
   return {
@@ -486,16 +716,16 @@ function childInvocation(input) {
   const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
-  const cwd = mkdtempSync2(join4(tmpdir2(), "teamhandbook-child-"));
+  const cwd = mkdtempSync3(join5(tmpdir3(), "teamhandbook-child-"));
   return {
     args,
     input: input.prompt,
     env: childEnv(),
     cwd,
-    done: () => rmSync2(cwd, { recursive: true, force: true })
+    done: () => rmSync3(cwd, { recursive: true, force: true })
   };
 }
-var execFileAsync, defaultScoreConfig, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_EXACT, CHILD_ENV_PREFIXES, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER;
+var execFileAsync2, defaultScoreConfig, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER;
 var init_score = __esm({
   "src/lib/score.ts"() {
     "use strict";
@@ -503,7 +733,10 @@ var init_score = __esm({
     init_config();
     init_prompt_safety();
     init_queue();
-    execFileAsync = promisify(execFile);
+    init_child_env();
+    init_host();
+    init_opencode();
+    execFileAsync2 = promisify2(execFile2);
     defaultScoreConfig = {
       model: "haiku",
       threshold: 7,
@@ -511,54 +744,6 @@ var init_score = __esm({
     };
     CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
     CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
-    CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
-      // where the CLI, node and its config live
-      "PATH",
-      "HOME",
-      "USER",
-      "SHELL",
-      "TMPDIR",
-      "LANG",
-      "TZ",
-      // the Windows spelling of the same things
-      "USERPROFILE",
-      "APPDATA",
-      "LOCALAPPDATA",
-      "SystemRoot",
-      "SystemDrive",
-      "COMSPEC",
-      "PATHEXT",
-      // Windows spells the temp directory with these, not TMPDIR
-      "TEMP",
-      "TMP",
-      // how it reaches the network at all, on a machine behind a proxy
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "NO_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "no_proxy",
-      // how it trusts that network, where TLS is intercepted by a corporate CA
-      "SSL_CERT_FILE",
-      "SSL_CERT_DIR",
-      "NODE_EXTRA_CA_CERTS",
-      "REQUESTS_CA_BUNDLE",
-      // which region a Vertex deployment answers on
-      "CLOUD_ML_REGION",
-      // which handbook home this call belongs to
-      "TEAMHANDBOOK_HOME"
-    ]);
-    CHILD_ENV_PREFIXES = [
-      "LC_",
-      "ANTHROPIC_",
-      "AWS_",
-      "GOOGLE_",
-      "GCLOUD_",
-      "CLOUDSDK_",
-      "AZURE_"
-    ];
     CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
       // which backend answers at all
       "CLAUDE_CODE_USE_BEDROCK",
@@ -656,8 +841,8 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync9, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join11 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync7, readdirSync as readdirSync4, readFileSync as readFileSync10, rmSync as rmSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join12 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -707,9 +892,9 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { dirname as dirname2, join as join6 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname2, join as join7 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -788,8 +973,8 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
 }
 
 // src/lib/branch.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join6 } from "node:path";
 init_identity();
 init_secrets();
 var BRANCH_EXAMPLE_MAX = 100;
@@ -805,7 +990,7 @@ function branchExampleProblem(value) {
 function readTeamBranchExample(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
+    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
   } catch {
     return {};
   }
@@ -827,7 +1012,7 @@ function compareVersions(a, b) {
 }
 function readPluginVersion(repoDir) {
   try {
-    const version = JSON.parse(readFileSync4(join5(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
+    const version = JSON.parse(readFileSync5(join6(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
     return typeof version === "string" ? version : void 0;
   } catch {
     return void 0;
@@ -840,9 +1025,9 @@ init_config();
 init_fs_atomic();
 
 // src/lib/display-path.ts
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir3()) {
+function displayPath(path, userHome = homedir4()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -1088,7 +1273,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync6(join7(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -1163,17 +1348,17 @@ function nonInteractiveEnv(base = process.env) {
   };
 }
 function marketplacesRoot() {
-  return join6(homedir4(), ".claude", "plugins", "marketplaces");
+  return join7(homedir5(), ".claude", "plugins", "marketplaces");
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname4, join as join8 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync6, readFileSync as readFileSync8, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname4, join as join9 } from "node:path";
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join7, relative } from "node:path";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, join as join8, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -1190,7 +1375,7 @@ init_identity();
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
   for (const part of path.split("/")) {
-    current = join7(current, part);
+    current = join8(current, part);
     let stat;
     try {
       stat = lstatSync(current);
@@ -1214,7 +1399,7 @@ function isTeamOwned(path) {
 }
 function readIfPresent(file) {
   try {
-    return readFileSync7(file, "utf8");
+    return readFileSync8(file, "utf8");
   } catch {
     return null;
   }
@@ -1271,7 +1456,7 @@ function prefixDependentPaths(team, withCi) {
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
 function upgradeCandidates(repoDir, team, branchExample) {
-  const withCi = existsSync4(join8(repoDir, CI_MARKER));
+  const withCi = existsSync4(join9(repoDir, CI_MARKER));
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
@@ -1298,14 +1483,14 @@ function upgradeCandidates(repoDir, team, branchExample) {
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join8(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join8(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join9(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join9(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
 }
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
-    const existing = readIfPresent(join8(repoDir, path));
+    const existing = readIfPresent(join9(repoDir, path));
     if (existing === null) return { path, state: "absent" };
     return { path, state: existing === content ? "current" : "differs" };
   });
@@ -1386,8 +1571,8 @@ function loadHarvestConfig(home = handbookHome()) {
 // src/lib/status.ts
 init_session_state();
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readFileSync as readFileSync8 } from "node:fs";
-import { basename as basename3, dirname as dirname5, join as join10, resolve } from "node:path";
+import { readFileSync as readFileSync9 } from "node:fs";
+import { basename as basename3, dirname as dirname5, join as join11, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/signals.ts
@@ -1437,7 +1622,7 @@ var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 init_score();
 
 // src/lib/pipeline.ts
-import { basename as basename2, join as join9 } from "node:path";
+import { basename as basename2, join as join10 } from "node:path";
 init_fs_atomic();
 init_session_state();
 init_secrets();
@@ -1452,7 +1637,7 @@ init_skill_index();
 init_queue();
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join9(home, "pipeline.log");
+  return join10(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -1478,7 +1663,7 @@ function pluginVersion() {
   const root = pluginRoot();
   if (!root) return "unknown";
   try {
-    const parsed = JSON.parse(readFileSync8(join10(root, ".claude-plugin", "plugin.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync9(join11(root, ".claude-plugin", "plugin.json"), "utf8"));
     if (typeof parsed?.version === "string") return parsed.version;
   } catch {
   }
@@ -1488,8 +1673,8 @@ function pluginRoot() {
   const here = dirname5(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
-      const parsed = JSON.parse(readFileSync8(join10(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join10(here, up);
+      const parsed = JSON.parse(readFileSync9(join11(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join11(here, up);
     } catch {
     }
   }
@@ -1510,7 +1695,7 @@ function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesR
   const marketplace = basename3(dirname5(dirname5(versionDir)));
   let out;
   try {
-    out = String(git(["ls-remote", "--tags", "origin"], join10(marketRoot, marketplace)) ?? "");
+    out = String(git(["ls-remote", "--tags", "origin"], join11(marketRoot, marketplace)) ?? "");
   } catch {
     return null;
   }
@@ -1537,7 +1722,7 @@ function newerReleaseLine(installed, newer) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync8(pipelineLogFile(home), "utf8");
+    raw = readFileSync9(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -1553,6 +1738,8 @@ function lastPipelineRun(home = handbookHome()) {
 }
 
 // src/lib/doctor.ts
+init_host();
+init_opencode();
 var runCommand = (cmd, args, timeoutMs, options) => {
   try {
     return execFileSync3(cmd, args, {
@@ -1691,6 +1878,89 @@ function checkClaudeCli(run, home) {
     )
   ];
 }
+var OPENCODE_READ_FROM = { major: 1, minor: 19 };
+function opencodeVersionNote(versionText) {
+  const match = /(\d+)\.(\d+)\.(\d+)/.exec(versionText);
+  if (!match) return `could not read a version from \`opencode --version\` ("${versionText.slice(0, 40)}")`;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (major === OPENCODE_READ_FROM.major && minor >= OPENCODE_READ_FROM.minor) return null;
+  return `v${match[0]}: the switches that isolate the model call were read from v${OPENCODE_READ_FROM.major}.${OPENCODE_READ_FROM.minor}, so whether this release still honours them is unverified`;
+}
+function checkOpencodeCli(run, home) {
+  const unknownIsolation = warn(
+    "model call isolation",
+    "not established: the `opencode CLI` check above did not get a successful call"
+  );
+  let versionText;
+  try {
+    versionText = run("opencode", ["--version"], 15e3);
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      return [fail("opencode CLI", "not found on PATH - drafting needs it; install OpenCode or fix PATH"), unknownIsolation];
+    }
+    const message = String(err instanceof Error ? err.message : err).split("\n")[0];
+    return [fail("opencode CLI", `found, but \`opencode --version\` failed or timed out: ${message}`), unknownIsolation];
+  }
+  const harvestModel = loadHarvestConfig(home).model;
+  const gateModel = loadScoreConfig(home).model;
+  const distillModel = loadDistillConfig(home).model;
+  const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
+  for (const model of models) {
+    const invocation = opencodeInvocation({ prompt: "Reply with exactly: OK", model: model ?? "", home });
+    try {
+      const reply = parseRunOutput(
+        run("opencode", invocation.args, PROBE_TIMEOUT_MS, {
+          env: invocation.env,
+          cwd: invocation.cwd,
+          input: invocation.input
+        })
+      );
+      if (!/\bok\b/i.test(reply)) {
+        return [
+          warn("opencode CLI", `installed, but a probe for "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`),
+          unknownIsolation
+        ];
+      }
+    } catch (err) {
+      const message = String(err?.stderr || (err instanceof Error ? err.message : err));
+      const mapped = invocation.args.includes("-m") ? `model ${invocation.args[invocation.args.indexOf("-m") + 1]}` : `"${model}" (unmapped, so OpenCode's own default model; map it in config.json opencode.models)`;
+      return [
+        fail(
+          "opencode CLI",
+          `the isolated \`opencode run\` with ${mapped} failed - is a provider logged in (\`opencode auth login\`) and does the model exist? ${(message.split("\n")[0] ?? "").slice(0, 120)}`
+        ),
+        unknownIsolation
+      ];
+    } finally {
+      invocation.done();
+    }
+  }
+  const versionNote = opencodeVersionNote(versionText);
+  return [
+    ok(
+      "opencode CLI",
+      models.length > 1 ? `installed and answering (${models.length} configured models reachable)` : "installed and answering"
+    ),
+    versionNote ? warn("model call isolation", versionNote) : ok(
+      "model call isolation",
+      "verified by a real call: tools denied, no plugins, no MCP servers, no global or project config beyond the model and provider, an empty working directory"
+    )
+  ];
+}
+function checkProjectSkillsSeen(env = process.env) {
+  const off = ["OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"].find(
+    (name) => env[name] && env[name] !== "0" && env[name] !== "false"
+  );
+  return off ? warn("skill discovery", `${off} is set, so OpenCode ignores .claude/skills - skills TeamHandbook adds to a project or to you will not load until it is unset`) : ok("skill discovery", "OpenCode reads .claude/skills, where TeamHandbook delivers project and personal skills");
+}
+function checkHost(home) {
+  const unknown = unknownHostSetting(process.env, home);
+  return unknown ? warn("host", `${unknown} is not a host this version knows (claude-code, opencode) - running as Claude Code`) : null;
+}
+function checkCli(host, run, home) {
+  return host === "opencode" ? checkOpencodeCli(run, home) : checkClaudeCli(run, home);
+}
 function checkGitIdentity(home, run) {
   if (!loadTeamConfig(home)) return null;
   const read = (args) => {
@@ -1712,21 +1982,21 @@ function checkGitIdentity(home, run) {
   );
 }
 function checkHomeWritable(home) {
-  const probe = join11(home, `.doctor-probe-${process.pid}`);
+  const probe = join12(home, `.doctor-probe-${process.pid}`);
   try {
-    mkdirSync6(home, { recursive: true });
+    mkdirSync7(home, { recursive: true });
     writeFileSync5(probe, "ok");
-    rmSync5(probe, { force: true });
+    rmSync6(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 function checkConfig(home) {
-  const file = join11(home, "config.json");
+  const file = join12(home, "config.json");
   if (!existsSync5(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync9(file, "utf8"));
+    const parsed = JSON.parse(readFileSync10(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -1758,10 +2028,10 @@ function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync9(join11(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync10(join12(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync4(join11(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync4(join12(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
@@ -1769,7 +2039,7 @@ function remoteDistributionState(team, run) {
   } catch {
     return null;
   } finally {
-    rmSync5(dir, { recursive: true, force: true });
+    rmSync6(dir, { recursive: true, force: true });
   }
 }
 function checkTeamRepo(home, run) {
@@ -1802,7 +2072,7 @@ function checkTeamRepo(home, run) {
 function checkTeamCopy(home, remoteVersion, marketRoot) {
   const team = loadTeamConfig(home);
   if (!team || !remoteVersion) return null;
-  const local = readPluginVersion(join11(marketRoot, team.marketplaceName));
+  const local = readPluginVersion(join12(marketRoot, team.marketplaceName));
   if (!local) return null;
   const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
@@ -1827,13 +2097,13 @@ function checkForge(home, run) {
   if (problem.includes("timed out")) return warn("forge CLI", `${problem} - ${instead}`);
   return warn("forge CLI", `${problem} - run \`${tool} auth login\` (${instead})`);
 }
-function isPlainObject(value) {
+function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function declaredMcpServerNames(mcpFile) {
   let raw;
   try {
-    raw = readFileSync9(mcpFile, "utf8");
+    raw = readFileSync10(mcpFile, "utf8");
   } catch {
     return { error: "unreadable" };
   }
@@ -1843,8 +2113,8 @@ function declaredMcpServerNames(mcpFile) {
   } catch {
     return { error: "invalid-json" };
   }
-  if (!isPlainObject(parsed)) return { error: "invalid-json" };
-  const map = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+  if (!isPlainObject2(parsed)) return { error: "invalid-json" };
+  const map = isPlainObject2(parsed.mcpServers) ? parsed.mcpServers : parsed;
   return { names: Object.keys(map) };
 }
 var MCP_LIST_LINE = /^(.+?):\s.*[-–]\s*(✔|✘|!)\s*(.+)$/;
@@ -1864,7 +2134,7 @@ function parseMcpListing(output) {
 function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const mcpFile = join11(marketRoot, team.marketplaceName, ".mcp.json");
+  const mcpFile = join12(marketRoot, team.marketplaceName, ".mcp.json");
   if (!existsSync5(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
@@ -1914,7 +2184,7 @@ function checkLastRun(home) {
     const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join11(home, "pipeline.log"))})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join12(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -1924,7 +2194,7 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join11(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join12(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function checkRelease(version, run, marketRoot, root) {
@@ -1934,13 +2204,18 @@ function checkRelease(version, run, marketRoot, root) {
 function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot(), root = pluginRoot()) {
   const version = pluginVersion();
   const release = checkRelease(version, run, marketRoot, root);
+  const host = activeHost(process.env, home);
+  const hostCheck = checkHost(home);
   const checks = [
     ...release ? [release] : [],
+    ...hostCheck ? [hostCheck] : [],
     checkNode(),
-    ...checkClaudeCli(run, home),
+    ...checkCli(host, run, home),
     checkHomeWritable(home),
     checkConfig(home),
-    checkHooks(home)
+    // OpenCode has no hooks wired yet: listing and drafting from history need none, and a
+    // "no hook events recorded" warning would send the reader looking for a fault
+    host === "opencode" ? checkProjectSkillsSeen() : checkHooks(home)
   ];
   const teamRepo = checkTeamRepo(home, run);
   checks.push(teamRepo.check);

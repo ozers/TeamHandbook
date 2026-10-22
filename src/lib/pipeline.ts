@@ -27,7 +27,7 @@ import { signalSecret } from "./secrets.js";
 import { incrementRedactionBlocked, bumpCounter } from "./counters.js";
 import { runRuleSieves } from "./gate.js";
 import type { DropReason } from "./gate.js";
-import { gateAutoEnabled, loadScoreConfig, runClaudeCli, scoreSignal } from "./score.js";
+import { gateAutoEnabled, loadScoreConfig, runModelCli, scoreSignal } from "./score.js";
 import { distillVerdict, gitRemoteUrl, loadDistillConfig, writeCandidate } from "./distill.js";
 import { defaultSkillDirs, listExistingSkills } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
@@ -679,7 +679,7 @@ export async function runManualSignal(
   // Before the sieve and before any model call: with the switch off there is no lesson
   // path to run, so nothing is read, nothing is sent and nothing is logged.
   if (!lessonHarvestEnabled(home)) return { stage: "disabled", message: LESSON_HARVEST_OFF };
-  const runner = deps.runner ?? runClaudeCli;
+  const runner = deps.runner ?? runModelCli;
   const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
   const listSkills = deps.listSkills ?? listExistingSkills;
   const scoreConfig = loadScoreConfig(home);
